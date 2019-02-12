@@ -33,12 +33,12 @@
 
 extern TSTextLogObject protocol_plugin_log;
 
-extern EcPeer ec_peers[MAX_EC_NODES];
-extern int EC_n;
-extern int EC_k;
-extern int EC_x;
-extern int n_peers;
-extern int current_node_EC_index;
+// extern EcPeer ec_peers[MAX_EC_NODES];
+// extern int EC_n;
+// extern int EC_k;
+// extern int EC_x;
+// extern int n_peers;
+// extern int current_node_EC_index;
 
 static void EC_contact_one_peer(TSCont main_contp, TxnData *txn_data, int peer_index);
 static int peer_conn_handle(TSCont contp, TSEvent event, void *edata);
@@ -75,7 +75,8 @@ setup_ec(TSCont main_contp, TSMutex mtx, TSHttpTxn txn)
   txn_data->peers         = ec_peers;
   txn_data->peer_resp_buf = (char **)TSmalloc(sizeof(char *) * EC_n);
   memset(txn_data->peer_resp_buf, 0, sizeof(char *) * EC_n);
-  txn_data->available_peers = 0;
+  txn_data->n_available_peers = 0;
+  tnx_data->ready_peers = 0; 
 
   // when there are k_peers are back, call main_contp
   // contp = TSContCreate(EC_main_handler, txn_data->mtx);
@@ -85,6 +86,7 @@ setup_ec(TSCont main_contp, TSMutex mtx, TSHttpTxn txn)
   EC_retrieve_from_peers(main_contp, txn_data);
 }
 
+/*
 int
 EC_main_handler(TSCont contp, TSEvent event, void *data)
 {
@@ -121,6 +123,7 @@ EC_main_handler(TSCont contp, TSEvent event, void *data)
 
   return TS_SUCCESS;
 }
+*/
 
 void
 EC_retrieve_from_peers(TSCont main_contp, TxnData *txn_data)
@@ -185,6 +188,7 @@ EC_retrieve_from_peers(TSCont main_contp, TxnData *txn_data)
   return;
 }
 
+/*
 static void
 EC_contact_one_peer(TSCont main_contp, TxnData *txn_data, int peer_index)
 {
@@ -230,7 +234,7 @@ EC_contact_one_peer(TSCont main_contp, TxnData *txn_data, int peer_index)
 }
 
 static int
-peer_conn_handle(TSCont contp, TSEvent event, void *edata)
+peer_conn_handle_old(TSCont contp, TSEvent event, void *edata)
 {
   PeerConnData *pcd = (PeerConnData *)TSContDataGet(contp);
   int my_peer_index = pcd->peer->index;
@@ -253,11 +257,11 @@ peer_conn_handle(TSCont contp, TSEvent event, void *edata)
 
     cleanup_peer_coon(contp);
     // TSMutexLockTry(txn_data->mtx); // TODO: why should it not check if we got the lock??
-    // txn_data->available_peers++;
+    // txn_data->n_available_peers++;
     // txn_data->ready_peers = txn_data->ready_peers | (1<<my_peer_index); 
     // TSMutexUnlock(txn_data->mtx);
-    int n_available = __sync_add_and_fetch(&(txn_data->available_peers), (1 << my_peer_index));
-    __sync_fetch_and_xor(&(txn_data->ready_peers), 1);
+    int n_available = __sync_add_and_fetch(&(txn_data->n_available_peers), 1);
+    __sync_fetch_and_xor(&(txn_data->ready_peers), (1 << my_peer_index));
 
     // might have problem due to data race
     if (n_available == EC_k + EC_x - 1) {
@@ -381,6 +385,7 @@ peer_conn_handle(TSCont contp, TSEvent event, void *edata)
   }
   return TS_SUCCESS;
 }
+*/
 
 void
 cleanup_peer_coon(TSCont contp)

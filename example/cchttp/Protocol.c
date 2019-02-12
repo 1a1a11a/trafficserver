@@ -21,11 +21,12 @@
   limitations under the License.
  */
 
-#include "util.h"
-#include "Protocol.h"
-#include "TxnSM.h"
 #include "tscore/ink_defs.h"
-#include <math.h>
+
+#include "Protocol.h"
+#include "util.h"
+#include "net.h"
+#include "ec.h"
 
 /* global variable */
 TSTextLogObject protocol_plugin_log;
@@ -37,11 +38,13 @@ int EC_k;
 int EC_x;
 int n_peers;
 int current_node_EC_index;
+int ssn_data_ind;
+int txn_data_ind;
 
 // static int get_my_ip(int *ips);
 // static int is_my_ip(int ip, int *ips, int n_ips);
 static int load_ec_peer(int argc, const char **argv, EcPeer *ec_peers, int *myips, int n_myips);
-static int EcHTTPHandler(TSCont contp, TSEvent event, void *edata);
+static int transaction_handler(TSCont contp, TSEvent event, void *edata);
 
 /* load ec nodes from command line arguments,
  * return the number of peers, which should be argc-2 (one is programName, one is current node)
@@ -82,138 +85,201 @@ load_ec_peer(int argc, const char **argv, EcPeer *ec_peers, int *myips, int n_my
 }
 
 static int
-EcHTTPHandler(TSCont contp, TSEvent event, void *edata)
+transaction_handler(TSCont contp, TSEvent event, void *edata)
 {
-  TSHttpTxn txnp     = (TSHttpTxn)edata;
-  TxnData *txn_data = (TxnData *)TSContDataGet(contp);
+  TSHttpTxn txnp = (TSHttpTxn)edata;
+  // SsnData *ssn_data = (SsnData *)TSHttpSsnArgGet(ssnp, ssn_data_ind);
+  TxnData *txn_data;
   // TSCont main_contp;
-  TSMutex pmutex;
+  // TSMutex pmutex;
+  // if (event == EC_EVENT_K_BACK)
+  //   TSDebug(PLUGIN_NAME, "transaction_handler: txn %" PRId64 " received EC_EVENT_K_BACK", TSHttpTxnIdGet(txnp));
+  // else
+  TSDebug(PLUGIN_NAME, "transaction_handler: txn %" PRId64 " received %s", TSHttpTxnIdGet(txnp), TSHttpEventNameLookup(event));
 
   switch (event) {
   // TS_HTTP_POST_REMAP_HOOK
   case TS_EVENT_HTTP_POST_REMAP:
-    TSDebug(PLUGIN_NAME, "handler get TS_EVENT_HTTP_POST_REMAP");
-    TSDebug(PLUGIN_NAME, "current alive server connections %d", TSHttpCurrentServerConnectionsGet());
+    TSHttpTxnUntransformedRespCache(txnp, 1);
+    TSHttpTxnTransformedRespCache(txnp, 0);
+    setup_txn(contp, txnp);
+    txn_data        = TSHttpTxnArgGet(txnp, txn_data_ind);
+    txn_data->contp = contp;
 
-    pmutex = (TSMutex)TSMutexCreate();
-    // txn_sm = (TSCont)TxnSMCreate(pmutex, edata);
-    setup_ec(contp, pmutex, txnp);
+    /* if we need to go through codding */
+    TSHttpSsn ssnp = TSHttpTxnSsnGet(txnp);
+    TSHttpSsnHookAdd(ssnp, TS_HTTP_TXN_CLOSE_HOOK, contp);
 
-    // TSMutexLockTry(pmutex); // TODO: why should it not check if we got the lock??
-    // TSContCall(txn_sm, 0, txn);
-    // TSMutexUnlock(pmutex);
-    // TSHttpTxnHookAdd(txnp, TS_HTTP_SEND_RESPONSE_HDR_HOOK, contp);
-
-    /* if we need to go through codding */ 
-    // TSHttpHookAdd(TS_HTTP_TXN_CLOSE_HOOK, contp);
-    // TSHttpHookAdd(TS_HTTP_READ_RESPONSE_HDR_HOOK, contp);
-    // TSHttpHookAdd(TS_HTTP_RESPONSE_TRANSFORM_HOOK, contp);
-
-    break;
-)
-  case EC_EVENT_K_BACK:
-    TSDebug(PLUGIN_NAME, "K+X-1 resp back! available peers %d", txn_data->available_peers);
-    // check k event
-    int64_t available_peers = 0, final_size = 0;
-    int current_peer_available = false;
-    for (int i = 0; i < EC_n; i++) {
-      current_peer_available = __sync_and_and_fetch(&(txn_data->available_peers), (1 << i));
-      // current_peer_available = txn_data->available_peers & (1 << i);
-      // if (txn_data->peer_resp_buf[i] != NULL) {
-
-      if (current_peer_available) {
-        available_peers++;
-        final_size += strlen(txn_data->peer_resp_buf[i]);
-        TSDebug(PLUGIN_NAME, "response %d %s", i, txn_data->peer_resp_buf[i]);
-      }
-    }
-    TSAssert(available_peers >= EC_k - 1);
-    TSDebug(PLUGIN_NAME, "K %d, response size sum is %" PRId64, EC_k, final_size);
-
-    txn_data->final_resp    = TSmalloc(sizeof(char) * final_size);
-    txn_data->final_resp[0] = '\0';
-    for (int i = 0; i < EC_n; i++) {
-      if (txn_data->peer_resp_buf[i] != NULL) {
-        TSstrlcat(txn_data->final_resp, txn_data->peer_resp_buf[i], final_size + 1);
-      }
-    }
-    TSDebug(PLUGIN_NAME, "final resp %s", txn_data->final_resp);
-    TSDebug(PLUGIN_NAME, "current alive server connections %d", TSHttpCurrentServerConnectionsGet());
-    txn_data->status = EC_STATUS_PEER_RESP_READY;
-    break;
-  // TS_HTTP_RESPONSE_TRANSFORM_HOOK
-  case TS_EVENT_IMMEDIATE:
-  case TS_EVENT_VCONN_WRITE_READY:
-  case TS_EVENT_HTTP_SEND_RESPONSE_HDR:
-    TSDebug(PLUGIN_NAME,
-            "handler get TS_EVENT_IMMEDIATE (%d) or TS_EVENT_VCONN_WRITE_READY (%d) TS_EVENT_HTTP_SEND_RESPONSE_HDR (%d) %d",
-            TS_EVENT_IMMEDIATE, TS_EVENT_VCONN_WRITE_READY, TS_EVENT_HTTP_SEND_RESPONSE_HDR, event);
-    if (txn_data->status == EC_STATUS_PEER_RESP_READY) {
-      // DO RS
-      ;
-    } else {
-      TSDebug(PLUGIN_NAME, "wait for peer response");
-      TSContSchedule(contp, 1, TS_THREAD_POOL_DEFAULT);
-    }
-    break;
-
-    if (txn_data && txn_data->status == EC_STATUS_ALL_ERADY) {
-      // prepare response
-      ;
-    } else
-      return 0;
-  case TS_EVENT_HTTP_READ_RESPONSE_HDR:
-    TSDebug(PLUGIN_NAME, "TS_EVENT_HTTP_READ_RESPONSE_HDR");
-    TSVConn vconn = TSTransformCreate(NULL, txnp);
+    TSVConn vconn = TSTransformCreate(RS_resp_transform_handler, txnp);
+    TSContDataSet(vconn, txn_data);
     TSHttpTxnHookAdd(txnp, TS_HTTP_RESPONSE_TRANSFORM_HOOK, vconn);
+
+    // TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
     break;
-  case TS_EVENT_VCONN_WRITE_COMPLETE:
-    /* When our output connection says that it has finished
-       reading all the data we've written to it then we should
-       shutdown the write portion of its connection to
-       indicate that we don't want to hear about it anymore. */
-    TSVConnShutdown(TSTransformOutputVConnGet(contp), 0, 1);
-    break;
+
+    // case EC_EVENT_K_BACK:
+    //   TSAssert(false);
+    //   txn_data = TSHttpTxnArgGet(txnp, txn_data_ind);
+    //   TSDebug(PLUGIN_NAME, "transaction_handler: txn %" PRId64 "K+X-1 resp back! available peers %d %s", TSHttpTxnIdGet(txnp),
+    //           txn_data->n_available_peers, int64_to_bitstring_static(txn_data->ready_peers));
+    //   // check k event
+    //   int64_t available_peers = 0, final_size = 0;
+    //   int current_peer_available = 0;
+    //   for (int i = 0; i < EC_n; i++) {
+    //     // current_peer_available = __sync_and_and_fetch(&(txn_data->ready_peers), (1 << i));
+    //     current_peer_available = txn_data->ready_peers & (1 << i);
+    //     // current_peer_available = txn_data->n_available_peers & (1 << i);
+    //     // if (txn_data->peer_resp_buf[i] != NULL) {
+
+    //     if (current_peer_available > 0) {
+    //       available_peers++;
+    //       final_size += strlen(txn_data->peer_resp_buf[i]);
+    //       TSDebug(PLUGIN_NAME, "transaction_handler: txn %" PRId64 "response %d %s", TSHttpTxnIdGet(txnp), i,
+    //               txn_data->peer_resp_buf[i]);
+    //     }
+    //   }
+    //   TSAssert(available_peers >= EC_k - 1);
+    //   TSDebug(PLUGIN_NAME, "K %d X %d, response size sum is %" PRId64, EC_k, EC_x, final_size);
+
+    //   txn_data->final_resp    = TSmalloc(sizeof(char) * final_size);
+    //   txn_data->final_resp[0] = '\0';
+    //   for (int i = 0; i < EC_n; i++) {
+    //     if (txn_data->peer_resp_buf[i] != NULL) {
+    //       TSstrlcat(txn_data->final_resp, txn_data->peer_resp_buf[i], final_size + 1);
+    //     }
+    //   }
+    //   TSDebug(PLUGIN_NAME, "final resp %s", txn_data->final_resp);
+    //   txn_data->status = EC_STATUS_PEER_RESP_READY;
+    //   break;
+    // case TS_EVENT_IMMEDIATE:
+    // case TS_EVENT_VCONN_WRITE_READY:
+    // case TS_EVENT_HTTP_SEND_RESPONSE_HDR:
+    //   TSAssert(false);
+    //   break;
+    // case TS_EVENT_HTTP_READ_RESPONSE_HDR:
+    //   TSDebug(PLUGIN_NAME, "TS_EVENT_HTTP_READ_RESPONSE_HDR");
+    //   break;
+    // case TS_EVENT_VCONN_WRITE_COMPLETE:
+    //   /* When our output connection says that it has finished
+    //      reading all the data we've written to it then we should
+    //      shutdown the write portion of its connection to
+    //      indicate that we don't want to hear about it anymore. */
+    //   TSVConnShutdown(TSTransformOutputVConnGet(contp), 0, 1);
+    //   break;
 
   case TS_EVENT_HTTP_TXN_CLOSE:
-    cleanup_main_contp(contp);
-    TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
+    txn_data = TSHttpTxnArgGet(txnp, txn_data_ind);
+    if (txn_data) {
+      // drop everything since txn is going to close
+      clean_txn(contp, txnp);
+      TSHttpTxnArgSet(txnp, txn_data_ind, NULL);
+      TSDebug(PLUGIN_NAME, "clean_txn: txn %ld, finish cleaning", TSHttpTxnIdGet(txnp));
+    
+    TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
+                         "**********************************************************************************");
+    TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
+                         "**********************************************************************************");
+    TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
+                         "**********************************************************************************");
+    TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
+                         "**********************************************************************************");
+    TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
+                         "**********************************************************************************");
+    TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
+                         "**********************************************************************************");
+    TSDebug(PLUGIN_NAME,
+            "*********************************************************************************************************"
+            "**********************************************************************************\n\n\n\n\n\n\n\n\n\n\n");
+    }
+    /* this contp is created globally, so don't destroy */ 
+    // TSContDestroy(contp);
     break;
 
+    // if (txn_data->n_available_peers < EC_k + EC_x) {
+    //   // we need to wait for all peer response back
+    //   TSDebug(PLUGIN_NAME, "transaction_handler: txn %ld wait for all peer response", TSHttpTxnIdGet(txnp));
+    //   txn_data->status = TXN_WAIT_FOR_CLEAN;
+    //   TSContSchedule(contp, 80, TS_THREAD_POOL_DEFAULT);
+    // } else {
+    //   clean_txn(contp, txnp);
+    //   // TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
+    // }
+    // break;
+  // will not be used
+  // case 2: // EVENT_INTERVAL when called by TS_Cont_Schedule
+  //   txn_data = TSHttpTxnArgGet(txnp, txn_data_ind);
+  //   if (txn_data->status == TXN_WAIT_FOR_CLEAN) {
+  //     if (txn_data->n_available_peers < EC_k + EC_x) {
+  //       // we need to wait for all peer response back
+  //       TSDebug(PLUGIN_NAME, "transaction_handler: txn %ld wait for all peer response", TSHttpTxnIdGet(txnp));
+  //       TSContSchedule(contp, 200, TS_THREAD_POOL_DEFAULT);
+  //     } else {
+  //       clean_txn(contp, txnp);
+  //     }
+
+  //   } else {
+  //     TSAssert(false);
+  //   }
+  //   break;
   case TS_EVENT_ERROR:
   default:
-    TSDebug(PLUGIN_NAME, "Unknown event %d in EcHTTPHandler, POST_REMAP is %d", event, TS_EVENT_HTTP_POST_REMAP);
-    TSError("[%s] unknown event %d in EcHTTPHandler, POST_REMAP is %d", PLUGIN_NAME, event, TS_EVENT_HTTP_POST_REMAP);
+    TSDebug(PLUGIN_NAME, "Unknown event %d in transaction_handler, POST_REMAP is %d", event, TS_EVENT_HTTP_POST_REMAP);
+    TSError("[%s] unknown event %d in transaction_handler, POST_REMAP is %d", PLUGIN_NAME, event, TS_EVENT_HTTP_POST_REMAP);
     break;
   }
 
-  // TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
+  // this is necessary!!! even for TS_EVENT_HTTP_TXN_CLOSE, without it, session won't close
+  TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
   return 0;
 }
 
-static int HttpSessionHandler(){
+static TSReturnCode
+session_handler(TSCont contp, TSEvent event, void *edata)
+{
+  TSHttpSsn ssnp = (TSHttpSsn)edata;
 
-  switch (event)
-  {
-  case TS_HTTP_SSN_START:
-    /* start TCP connection to each peer */
+  TSDebug(PLUGIN_NAME, "session_handler:  ssn %" PRId64 " receive %s", TSHttpSsnIdGet(ssnp), TSHttpEventNameLookup(event));
+  switch (event) {
+  case TS_EVENT_HTTP_SSN_START:
+
+    setup_ssn(ssnp, n_peers);
+    SsnData *ssn_data = TSHttpSsnArgGet(ssnp, ssn_data_ind);
+
+    // TSCont txn_contp      = TSContCreate(transaction_handler, TSMutexCreate());
+    // TSHttpSsnHookAdd(ssnp, TS_HTTP_POST_REMAP_HOOK, txn_contp);
+
+    TSDebug(PLUGIN_NAME, "session_handler:  ssn %ld peer_connect is on the fly currently %d peers connected", TSHttpSsnIdGet(ssnp),
+            ssn_data->n_connected_peers);
     break;
 
-  case TS_HTTP_SSN_CLOSE_HOOK:
-    /* close TCP connection to each peer */
-  
-    break; 
-   default:
+  case TS_EVENT_HTTP_SSN_CLOSE:
+    clean_ssn(ssnp, n_peers);
+    TSDebug(PLUGIN_NAME, "session_handler:  ssn %ld session closed", TSHttpSsnIdGet(ssnp));
+    TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
+                         "**********************************************************************************");
+    TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
+                         "**********************************************************************************");
+    TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
+                         "**********************************************************************************");
+    TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
+                         "**********************************************************************************");
+    TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
+                         "**********************************************************************************");
+    TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
+                         "**********************************************************************************");
+    TSDebug(PLUGIN_NAME,
+            "*********************************************************************************************************"
+            "**********************************************************************************\n\n\n\n\n\n\n\n\n\n\n");
+
+    break;
+
+  default:
     break;
   }
 
-
-
-  TSHttpSsnReenable(ssnp, event); 
-  return TS_SUCCESS; 
+  TSHttpSsnReenable(ssnp, TS_EVENT_HTTP_CONTINUE);
+  return TS_SUCCESS;
 }
-
-
 
 void
 TSPluginInit(int argc, const char *argv[])
@@ -244,7 +310,7 @@ TSPluginInit(int argc, const char *argv[])
     TSError("[%s] failed to load my ip", PLUGIN_NAME);
     goto error;
   }
-  TSDebug(PLUGIN_NAME, "load %d my ips", n_myips);
+  TSDebug(PLUGIN_NAME, "I have %d ips", n_myips);
 
   n_peers = load_ec_peer(argc, argv, ec_peers, myips, n_myips);
   if (n_peers != argc - 2) {
@@ -264,19 +330,24 @@ TSPluginInit(int argc, const char *argv[])
 
   // Jason::Debug::Temp
   EC_k = n_peers;
-  EC_n = n_peers;
-  EC_x = 0;
+  EC_n = n_peers+1;
+  EC_x = 1;
 
-  TSCont contp = TSContCreate(EcHTTPHandler, TSMutexCreate());
-  TSCont ssn_contp = TSContCreate(HttpSessionHandler, TSMutexCreate());
+  TSCont ssn_contp = TSContCreate(session_handler, TSMutexCreate());
+  TSCont contp     = TSContCreate(transaction_handler, TSMutexCreate());
 
-  TSHttpHookAdd(TS_HTTP_POST_REMAP_HOOK, contp);
+  CHECK(TSHttpSsnArgIndexReserve(PLUGIN_NAME, "session data", &ssn_data_ind));
+  CHECK(TSHttpTxnArgIndexReserve(PLUGIN_NAME, "transaction data", &txn_data_ind));
 
   TSHttpHookAdd(TS_HTTP_SSN_START_HOOK, ssn_contp);
   TSHttpHookAdd(TS_HTTP_SSN_CLOSE_HOOK, ssn_contp);
 
+  TSHttpHookAdd(TS_HTTP_POST_REMAP_HOOK, contp);
+
   TSDebug(PLUGIN_NAME, "initialization finish");
+  return;
 
 error:
+  TSDebug(PLUGIN_NAME, " Plugin not initialized");
   TSError("[%s] Plugin not initialized", PLUGIN_NAME);
 }

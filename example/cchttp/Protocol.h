@@ -23,7 +23,9 @@
 
 #pragma once
 #define _GNU_SOURCE /* To get defns of NI_MAXSERV and NI_MAXHOST */
+#define MY_DEBUG_LEVEL 4      // 0-5
 
+#include <unistd.h>
 // #include <stdio.h>
 // #include <stdlib.h>
 // #include <limits.h>
@@ -33,7 +35,14 @@
 // #include <sys/time.h>
 // #include <sys/types.h>
 
+#include <math.h>
+#include <inttypes.h>
+#include <arpa/inet.h>
+
 #include <ts/ts.h>
+// #include "net.h"
+
+// #include <queue>
 
 // #include <unistd.h>
 // #include <errno.h>
@@ -42,10 +51,8 @@
 // #include <netinet/in.h>
 // #include <arpa/inet.h>
 
-
 // #include <ifaddrs.h>
 // #include <linux/if_link.h>
-
 
 #define PLUGIN_NAME "echttp"
 
@@ -56,7 +63,6 @@
 /* MAX_SERVER_NAME_LENGTH + MAX_FILE_NAME_LENGTH + strlen("\n\n") */
 #define MAX_REQUEST_LENGTH 2050
 
-
 #define MAX_EC_NODES 32
 #define MAX_IP_PER_NODE 8
 
@@ -64,75 +70,112 @@
 
 // #define EC_EVENT_K_BACK 102400
 
-
 #define EC_STATUS_BEGIN 0
 #define EC_STATUS_PEER_RESP_READY 1
-#define EC_STATUS_RESP_READY 2 
-#define EC_STATUS_ALL_ERADY 3
-
-
-typedef int (*TxnSMHandler)(TSCont contp, TSEvent event, void *data);
-
-
-#define set_handler(_d, _s) \
-  {                         \
-    _d = _s;                \
-  }
+// #define EC_STATUS_RESP_READY 2
+// #define EC_STATUS_ALL_READY 3
+#define TXN_WAIT_FOR_CLEAN 2 
 
 
 typedef struct _EcPeer {
-    char* addr_str; 
-    int ip;
-    int port;
-    struct sockaddr_in addr;
-    int index;
+  char *addr_str;
+  int ip;
+  int port;
+  struct sockaddr_in addr;
+  int index;
 } EcPeer;
 
 
-typedef struct _TxnData{
+/*
+// this is used for echttp, however, this is not implemented at this time 
+class EcConnectionPool
+{
+public:
+  EcConnectionPool(int n_peer, EcPeer *peers, int n_conn_per_peer = 200);
 
-  TSHttpTxn txn; 
+  TSVConn get_one_connection();
+  int put_one_connection();
 
-  TSMutex mtx; 
+  int check_connection_pool();
+  int repair_connection_pool();
+
+private:
+  TSMutex mtx;
+  queue<TSVConn> connection_pool;
+  int _build_connection_pool();
+
+  static int vccon_handler(TSCont contp, TSEvent event, void *data);
+
+}
+*/
+
+struct _TxnData; 
+struct _PeerConnData; 
+typedef struct _SsnData {
+  // TSMutex mtx;
+  // TSVConn *vconns;
+  // TSCont *contps;
+  struct _PeerConnData *pcds; 
+  volatile int n_connected_peers;
+  struct _TxnData *current_txn_data;
+
+} SsnData;
+
+
+typedef struct _TxnData {
+  TSHttpTxn txnp;
+  TSCont contp; 
+
+  // TSMutex mtx;
   // TSAction pending_action;
   // TxnSMHandler current_handler;
 
-  volatile int16_t available_peers; // __builtin_popcount
+  volatile int16_t n_available_peers; // __builtin_popcount
   volatile int64_t ready_peers;     // use the bit of a 64-bit integer to represent peers
-  char **peer_resp_buf;
-  char *final_resp; 
-
-  int status; 
-
-  char* request_path_component; 
-  char* request_string; 
-  TSIOBuffer request_buffer; 
   
-  EcPeer* peers; 
+  TSIOBufferReader *peer_resp_readers; 
+  char **peer_resp_buf;
+  char *final_resp;
 
-}TxnData; 
+  int status;
 
-typedef struct _PeerConnData{
+  char *request_path_component;
+  char *request_string;
+  TSIOBuffer request_buffer;
+  TSIOBufferReader *request_buffer_readers;
 
-  TSVConn vconn; 
-  TSVIO read_vio; 
-  TSVIO write_vio; 
-  // TSIOBuffer request_buffer; 
+  // response transform
+  TSVIO output_vio;
+  TSIOBuffer output_buffer;
+  TSIOBufferReader output_reader;
+
+  int64_t osize; 
+  TSIOBuffer my_temp_buffer; 
+  TSIOBufferReader my_temp_reader; 
+
+} TxnData;
+
+typedef struct _PeerConnData {
+  TSVConn vconn;
+  TSCont contp;
+  TSVIO read_vio;
+  TSVIO write_vio;
+  // TSIOBuffer request_buffer;
+
+  // needs to be initialized at txn start 
   TSIOBuffer response_buffer;
-  TSIOBufferReader request_buffer_reader;
   TSIOBufferReader response_buffer_reader;
 
-  bool content_has_began; 
+  bool content_has_began;
+  int64_t content_length; 
+  int64_t read_in_length; 
 
-  // int q_server_response_length;
-  // int q_block_bytes_read;
+  // char *request_string;
+  // char *request, *response;
 
-  // char *request_string; 
-  // char *request, *response; 
+  EcPeer *peer;
+  // TxnData *txn_data;
 
-  EcPeer *peer; 
-  TxnData* txn_data; 
-  
-  TSCont main_contp, contp; 
+  // TSCont main_contp, contp;
 
-}PeerConnData; 
+} PeerConnData;

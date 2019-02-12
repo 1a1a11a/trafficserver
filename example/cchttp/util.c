@@ -3,7 +3,6 @@
 #include "util.h"
 #include "Protocol.h"
 
-
 /* this can only finds one ip, 127.0.0.1 */
 inline static int
 get_my_ip0(int *ips)
@@ -85,4 +84,35 @@ is_my_ip(int ip, int *ips, int n_ips)
       return 1;
   }
   return 0;
+}
+
+void
+printbits(int64_t x)
+{
+  for (int i = sizeof(x) << 3; i; i--)
+    putchar('0' + ((x >> (i - 1)) & 1));
+}
+
+char *
+int64_to_bitstring_static(int64_t x)
+{
+  static char bitbuf[65];
+  for (int i = 64; i > 0; i--)
+    bitbuf[64 - i] = '0' + ((x >> (i - 1)) & 1);
+  bitbuf[64] = 0;
+  return bitbuf;
+}
+
+void
+print_reader(const char *plugin_name, TSIOBufferReader reader)
+{
+  int64_t avail      = TSIOBufferReaderAvail(reader);
+  TSIOBufferBlock bb = TSIOBufferReaderStart(reader);
+  int64_t avail2     = TSIOBufferBlockReadAvail(bb, reader);
+  int64_t avail3     = 0;
+  const char *dp     = TSIOBufferBlockReadStart(bb, reader, &avail3);
+  TSDebug(PLUGIN_NAME, "print_reader: avail %ld, %ld, %ld", avail, avail2, avail3); 
+  char *c      = TSstrndup(dp, avail3);
+  TSDebug(PLUGIN_NAME, "print_reader: avail %ld, %ld, %ld,reader %s", avail, avail2, avail3, c);
+  TSfree(c); 
 }

@@ -45,5 +45,38 @@
 #define CHECKNULL(x)  assert((x) != NULL)
 
 
+#define debug(fmt, args...)                                                             \
+  do {                                                                                  \
+    TSDebug(PLUGIN_NAME, "DEBUG: [%s:%d] [%s] " fmt, __FILE__, __LINE__, __FUNCTION__, ##args); \
+  } while (0)
+
+#define info(fmt, args...)              \
+  do {                                  \
+    TSDebug(PLUGIN_NAME, "INFO: " fmt, ##args); \
+  } while (0)
+
+#define warning(fmt, args...)              \
+  do {                                     \
+    TSDebug(PLUGIN_NAME, "WARNING: " fmt, ##args); \
+  } while (0)
+
+#define error(fmt, args...)                                                             \
+  do {                                                                                  \
+    TSError("[%s:%d] [%s] ERROR: " fmt, __FILE__, __LINE__, __FUNCTION__, ##args);      \
+    TSDebug(PLUGIN_NAME, "[%s:%d] [%s] ERROR: " fmt, __FILE__, __LINE__, __FUNCTION__, ##args); \
+  } while (0)
+
+#define fatal(fmt, args...)                                                             \
+  do {                                                                                  \
+    TSError("[%s:%d] [%s] ERROR: " fmt, __FILE__, __LINE__, __FUNCTION__, ##args);      \
+    TSDebug(PLUGIN_NAME, "[%s:%d] [%s] ERROR: " fmt, __FILE__, __LINE__, __FUNCTION__, ##args); \
+    exit(-1);                                                                           \
+  } while (0)
+
+
+
 int get_my_ip(int *ips);
-int is_my_ip(int ip, int *ips, int n_ips); 
+int is_my_ip(int ip, int *ips, int n_ips);
+void printbits(int64_t x);
+char *int64_to_bitstring_static(int64_t x);
+void print_reader(const char *plugin_name, TSIOBufferReader reader);
