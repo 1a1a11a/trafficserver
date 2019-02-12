@@ -495,7 +495,11 @@ typedef enum {
   TS_EVENT_SSL_VERIFY_SERVER                    = 60205,
   TS_EVENT_SSL_VERIFY_CLIENT                    = 60206,
 
-  TS_EVENT_MGMT_UPDATE                          = 60300
+  TS_EVENT_MGMT_UPDATE                          = 60300,
+
+
+  EC_EVENT_PEER_BEGIN_WRITE = 12344,
+  EC_EVENT_K_BACK = 12345
 } TSEvent;
 #define TS_EVENT_HTTP_READ_REQUEST_PRE_REMAP TS_EVENT_HTTP_PRE_REMAP /* backwards compat */
 
