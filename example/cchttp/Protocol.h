@@ -133,7 +133,7 @@ typedef struct _TxnData {
   volatile int16_t n_available_peers; // __builtin_popcount
   volatile int64_t ready_peers;     // use the bit of a 64-bit integer to represent peers
   
-  TSIOBufferReader *peer_resp_readers; 
+  // TSIOBufferReader *peer_resp_readers; 
   char **peer_resp_buf;
   char *final_resp;
 

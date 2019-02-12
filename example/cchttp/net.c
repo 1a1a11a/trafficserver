@@ -96,7 +96,7 @@ setup_txn(TSCont contp, TSHttpTxn txnp)
   txn_data->request_path_component = NULL;
   txn_data->peer_resp_buf          = (char **)TSmalloc(sizeof(char *) * (EC_k + EC_x - 1));
   // Jason::Optimize:: move to ssn should improve performance
-  txn_data->peer_resp_readers      = (TSIOBufferReader *)TSmalloc(sizeof(TSIOBufferReader) * (EC_k + EC_x - 1));
+  // txn_data->peer_resp_readers      = (TSIOBufferReader *)TSmalloc(sizeof(TSIOBufferReader) * (EC_k + EC_x - 1));
   txn_data->request_buffer_readers = (TSIOBufferReader *)TSmalloc(sizeof(TSIOBufferReader) * (EC_k + EC_x - 1));
   memset(txn_data->peer_resp_buf, 0, sizeof(char *) * (EC_k + EC_x - 1));
   txn_data->n_available_peers = 0;
@@ -115,7 +115,7 @@ setup_txn(TSCont contp, TSHttpTxn txnp)
   for (int i = 0; i < EC_k + EC_x - 1; i++) {
     // initialize per transaction structure
     ssn_data->pcds[i].content_has_began = false;
-    txn_data->peer_resp_readers[i]      = TSIOBufferReaderAlloc(ssn_data->pcds[i].response_buffer);
+    // txn_data->peer_resp_readers[i]      = TSIOBufferReaderAlloc(ssn_data->pcds[i].response_buffer);
     ssn_data->pcds[i].content_length    = 0;
     ssn_data->pcds[i].read_in_length    = 0;
     // Jason::TODO::Do I have to do this?
@@ -151,10 +151,10 @@ setup_txn(TSCont contp, TSHttpTxn txnp)
   TSDebug(PLUGIN_NAME, "setup_txn: txn %" PRId64 " request path %s", TSHttpTxnIdGet(txnp), txn_data->request_path_component);
   // 256 is large enough
   txn_data->request_string = (char *)TSmalloc(sizeof(char) * (path_length + 256));
-  sprintf(txn_data->request_string, "GET /size/12800 HTTP/1.1\r\nHost: d30.jasony.me:8080\r\n\r\n",
-          txn_data->request_path_component);
-  // sprintf(txn_data->request_string, "GET /%s-peerConn HTTP/1.1\r\nHost: d30.jasony.me:8080\r\n\r\n",
+  // sprintf(txn_data->request_string, "GET /size/12800 HTTP/1.1\r\nHost: d30.jasony.me:8080\r\n\r\n",
   //         txn_data->request_path_component);
+  sprintf(txn_data->request_string, "GET /%s-peerConn HTTP/1.1\r\nHost: d30.jasony.me:8080\r\n\r\n",
+          txn_data->request_path_component);
   txn_data->request_buffer = TSIOBufferCreate();
   CHECKNULL(txn_data->request_buffer);
   TSIOBufferWrite(txn_data->request_buffer, txn_data->request_string, strlen(txn_data->request_string));
@@ -184,7 +184,7 @@ clean_txn(TSCont contp, TSHttpTxn txnp)
     if (txn_data->peer_resp_buf[i])
       TSfree(txn_data->peer_resp_buf[i]);
     TSIOBufferReaderFree(txn_data->request_buffer_readers[i]);
-    TSIOBufferReaderFree(txn_data->peer_resp_readers[i]);
+    // TSIOBufferReaderFree(txn_data->peer_resp_readers[i]);
     // Jason::TODO::Do I have to do this?
     // TSIOBufferDestroy(ssn_data->pcds[i].response_buffer);
   }
@@ -254,7 +254,6 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
     break;
 
   case TS_EVENT_VCONN_WRITE_COMPLETE:
-    // TSDebug(PLUGIN_NAME, "peer_conn_handler: peer %d Write Complete", peer->index);
     pcd->read_vio = TSVConnRead(pcd->vconn, contp, pcd->response_buffer, INT64_MAX);
     CHECKNULL(pcd->read_vio);
     // TSVConnShutdown(pcd->vconn, 0, 1);
@@ -315,11 +314,10 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
         n_left                   = available;
 
         while (n_left > 0) {
-          if (response_str == NULL) {// first read
+          if (response_str == NULL) { // first read
             block = TSIOBufferReaderStart(pcd->response_buffer_reader);
-          }
-          else{
-            TSDebug(PLUGIN_NAME, "blockNext called"); 
+          } else {
+            TSDebug(PLUGIN_NAME, "blockNext called");
             block = TSIOBufferBlockNext(block);
           }
           // may be we don't want to extract the string now as we can pass the reader around?
@@ -384,19 +382,21 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
           }
         }
 
-        TSDebug(PLUGIN_NAME, "TEMP: ****** will ot set ndone from %ld to %ld, available %ld will consume %ld",
-                +TSVIONDoneGet(pcd->read_vio), available + +TSVIONDoneGet(pcd->read_vio),
-                TSIOBufferReaderAvail(pcd->response_buffer_reader), available);
+        // TSDebug(PLUGIN_NAME, "TEMP: ****** will ot set ndone from %ld to %ld, available %ld will consume %ld",
+        //         +TSVIONDoneGet(pcd->read_vio), available + +TSVIONDoneGet(pcd->read_vio),
+        //         TSIOBufferReaderAvail(pcd->response_buffer_reader), available);
 
-        TSVIONDoneSet(pcd->read_vio, available + TSVIONDoneGet(pcd->read_vio));
+        // TSVIONDoneSet(pcd->read_vio, available + TSVIONDoneGet(pcd->read_vio));
         // Jason::DEBUG::disable this for reading in ec
-        // TSIOBufferReaderConsume(TSVIOReaderGet(pcd->read_vio), available);
         TSIOBufferReaderConsume(pcd->response_buffer_reader, available);
-        TSDebug(PLUGIN_NAME, "getreader %p", TSVIOReaderGet(pcd->read_vio)); 
-        TSDebug(PLUGIN_NAME, "reader now %ld available", TSIOBufferReaderAvail(pcd->response_buffer_reader)); 
+
         // TSVIONDoneSet(pcd->read_vio, n_read + TSVIONDoneGet(pcd->read_vio));
         // TSIOBufferReaderConsume(pcd->response_buffer_reader, n_read);
+        // TSDebug(PLUGIN_NAME, "I want to write 30 Bytes, I wrote %ld",
+        //         TSIOBufferWrite(pcd->response_buffer, "abcdefghijklmnopqrstuvwxyzzyxwvu", 30));
+        // TSDebug(PLUGIN_NAME, "reader now %ld available", TSIOBufferReaderAvail(pcd->response_buffer_reader));
       }
+
       if (pcd->content_length != 0 && pcd->content_length == pcd->read_in_length) {
         TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %ld peer %d read finish %" PRId64 " Bytes/%" PRId64 " Bytes", txn_id,
                 peer->index, pcd->read_in_length, pcd->content_length);
@@ -408,16 +408,11 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
       } else {
         TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %ld peer %d read not finish %" PRId64 " Bytes/%" PRId64 " Bytes", txn_id,
                 peer->index, pcd->read_in_length, pcd->content_length);
-        TSDebug(PLUGIN_NAME, "enable read_vio, available %ld, todo %ld", TSIOBufferReaderAvail(pcd->response_buffer_reader),
-                TSVIONTodoGet(pcd->read_vio));
+        TSDebug(PLUGIN_NAME, "enable read_vio, available %ld, todo %ld, buf %p %p",
+                TSIOBufferReaderAvail(pcd->response_buffer_reader), TSVIONTodoGet(pcd->read_vio), pcd->response_buffer,
+                TSVIOBufferGet(pcd->read_vio));
 
-        // if (TSVIONTodoGet(pcd->read_vio) > 0) {
-        //   if (available > 0) {
-        //     TSContCall(TSVIOContGet(pcd->read_vio), TS_EVENT_VCONN_WRITE_READY, pcd->read_vio);
-        //   }
-        // }
         TSVIOReenable(pcd->read_vio);
-        // pcd->read_vio = TSVConnRead(pcd->vconn, contp, pcd->response_buffer, INT64_MAX);
       }
     }
     break;
