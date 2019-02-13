@@ -76,8 +76,9 @@ get_my_ip(int *ips)
 }
 
 char* convert_ip_to_str(int ip){
+  uint32_t ip2 = (uint32_t)ip; 
   static char ip_str[16]; 
-  sprintf(ip_str, "%u.%u.%u.%u", ip>>24, ip<<8>>24, ip<<16>>24, ip<<24>>24); 
+  sprintf(ip_str, "%d.%d.%d.%d", ip2>>24, ip2<<8>>24, ip2<<16>>24, ip2<<24>>24); 
   return ip_str; 
 }
 

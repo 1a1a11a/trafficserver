@@ -97,6 +97,8 @@ setup_txn(TSCont contp, TSHttpTxn txnp)
   txn_data->status                 = EC_STATUS_BEGIN;
   txn_data->final_resp             = NULL;
   txn_data->request_path_component = NULL;
+  // Jason::Optimize::maybe EC_k + EC_x - 1
+  txn_data->chunk_arrival_ts = (int64_t*) TSmalloc(sizeof(int64_t) * (EC_k + EC_x)); 
   txn_data->peer_resp_buf          = (char **)TSmalloc(sizeof(char *) * (EC_k + EC_x - 1));
   // Jason::Optimize:: move to ssn should improve performance
   // txn_data->peer_resp_readers      = (TSIOBufferReader *)TSmalloc(sizeof(TSIOBufferReader) * (EC_k + EC_x - 1));
@@ -285,6 +287,8 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
   case TS_EVENT_VCONN_READ_COMPLETE:
     ;
     // when the other peers support persistent connection, this can also be called
+    record_time(protocol_plugin_log, txn_data, CHUNK_ARRIVAL, (void*)(int64_t)(peer->index));
+
     int n_available     = __sync_add_and_fetch(&(txn_data->n_available_peers), 1);
     int64_t ready_peers = __sync_or_and_fetch(&(txn_data->ready_peers), (1 << peer->index));
 

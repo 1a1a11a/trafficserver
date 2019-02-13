@@ -136,6 +136,7 @@ typedef struct _TxnData {
 
   // timer
   int64_t txn_start_ts;
+  int64_t post_remap_ts; 
   int64_t local_finish_ts;
   int64_t *chunk_arrival_ts;
   int64_t decoding_start_ts;
@@ -175,13 +176,14 @@ typedef struct _PeerConnData {
 } PeerConnData;
 
 typedef enum _timeType {
-  TXN_START       = 1,
-  LOCAL_FINISH    = 2,
-  CHUNK_ARRIVAL   = 3,
-  DECODING_START  = 4,
-  DECODING_FINISH = 5,
-  RESPONSE_BEGIN  = 6,
-  TXN_FINISH      = 7
+  TXN_START       ,
+  POST_REMAP, 
+  LOCAL_FINISH    ,
+  CHUNK_ARRIVAL   ,
+  DECODING_START  ,
+  DECODING_FINISH ,
+  RESPONSE_BEGIN  ,
+  TXN_FINISH      
 } TimeType;
 
 static inline void
@@ -194,33 +196,38 @@ record_time(TSTextLogObject log_obj, TxnData *txn_data, TimeType time_type, void
   switch (time_type) {
   case TXN_START:
     txn_data->txn_start_ts = time_in_micro;
-    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s TxnStart %ld\n", txn_data->ssn_txn_id, time_in_micro);
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s TxnStart %ld", txn_data->ssn_txn_id, time_in_micro);
+    break;
+  case POST_REMAP:
+    txn_data->post_remap_ts = time_in_micro - txn_data->txn_start_ts;
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s PostRemap %ld", txn_data->ssn_txn_id, txn_data->post_remap_ts);
     break;
   case LOCAL_FINISH:
     txn_data->local_finish_ts = time_in_micro - txn_data->txn_start_ts;
-    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s LocalFinish %ld\n", txn_data->ssn_txn_id, txn_data->local_finish_ts);
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s LocalFinish %ld", txn_data->ssn_txn_id, txn_data->local_finish_ts);
     break;
-  case CHUNK_ARRIVAL:;
+  case CHUNK_ARRIVAL:
+    ;
     int64_t chunk_id                     = (int64_t)(other_data);
     txn_data->chunk_arrival_ts[chunk_id] = time_in_micro - txn_data->txn_start_ts;
-    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s ChunkArrival chunk %ld: %ld\n", txn_data->ssn_txn_id, chunk_id,
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s ChunkArrival chunk %ld: %ld", txn_data->ssn_txn_id, chunk_id,
                          txn_data->chunk_arrival_ts[chunk_id]);
     break;
   case DECODING_START:
     txn_data->decoding_start_ts = time_in_micro - txn_data->txn_start_ts;
-    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s DecodingStart %ld\n", txn_data->ssn_txn_id, txn_data->decoding_start_ts);
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s DecodingStart %ld", txn_data->ssn_txn_id, txn_data->decoding_start_ts);
     break;
   case DECODING_FINISH:
     txn_data->decoding_finish_ts = time_in_micro - txn_data->txn_start_ts;
-    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s DecodingFinish %ld\n", txn_data->ssn_txn_id, txn_data->decoding_finish_ts);
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s DecodingFinish %ld", txn_data->ssn_txn_id, txn_data->decoding_finish_ts);
     break;
   case RESPONSE_BEGIN:
     txn_data->response_begin_ts = time_in_micro - txn_data->txn_start_ts;
-    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s RespBegin %ld\n", txn_data->ssn_txn_id, txn_data->response_begin_ts);
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s RespBegin %ld", txn_data->ssn_txn_id, txn_data->response_begin_ts);
     break;
   case TXN_FINISH:
     txn_data->txn_finish_ts = time_in_micro - txn_data->txn_start_ts;
-    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s TxnFinish %ld\n", txn_data->ssn_txn_id, txn_data->txn_finish_ts);
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s TxnFinish %ld", txn_data->ssn_txn_id, txn_data->txn_finish_ts);
     break;
     default:
     TSAssert(false); 

@@ -105,6 +105,9 @@ transaction_handler(TSCont contp, TSEvent event, void *edata)
     txn_data        = TSHttpTxnArgGet(txnp, txn_data_ind);
     txn_data->contp = contp;
 
+    // this is not exactly the txn start due to creating TxnData, but it is really close 
+    record_time(protocol_plugin_log, txn_data, TXN_START, NULL);
+
     /* if we need to go through codding */
     TSHttpSsn ssnp = TSHttpTxnSsnGet(txnp);
     TSHttpSsnHookAdd(ssnp, TS_HTTP_TXN_CLOSE_HOOK, contp);
@@ -115,7 +118,9 @@ transaction_handler(TSCont contp, TSEvent event, void *edata)
 
     break;
   case TS_EVENT_HTTP_POST_REMAP:
-    conn_peer(contp, txnp); 
+    conn_peer(contp, txnp);
+    txn_data = TSHttpTxnArgGet(txnp, txn_data_ind);
+    record_time(protocol_plugin_log, txn_data, POST_REMAP, NULL);
     // TSHttpTxnUntransformedRespCache(txnp, 1);
     // TSHttpTxnTransformedRespCache(txnp, 0);
     // setup_txn(contp, txnp);
@@ -206,6 +211,7 @@ transaction_handler(TSCont contp, TSEvent event, void *edata)
     TSDebug(PLUGIN_NAME,
             "*********************************************************************************************************"
             "**********************************************************************************\n\n\n\n\n\n\n\n\n\n\n");
+    record_time(protocol_plugin_log, txn_data, TXN_FINISH, NULL);
     }
     /* this contp is created globally, so don't destroy */ 
     // TSContDestroy(contp);
@@ -342,11 +348,11 @@ TSPluginInit(int argc, const char *argv[])
 
   CHECK(TSTextLogObjectWrite(protocol_plugin_log, "# myip "));
   for (int i=0; i<n_myips; i++){
-    CHECK(TSTextLogObjectWrite(protocol_plugin_log, "%s ", convert_ip_to_str(myips[i])));
+    CHECK(TSTextLogObjectWrite(protocol_plugin_log, "# %s ", convert_ip_to_str(myips[i])));
   }
   CHECK(TSTextLogObjectWrite(protocol_plugin_log, "# peers "));
   for (int i = 0; i < n_peers; i++) {
-    CHECK(TSTextLogObjectWrite(protocol_plugin_log, "%s ", ec_peers[i].addr_str));
+    CHECK(TSTextLogObjectWrite(protocol_plugin_log, "# %s ", ec_peers[i].addr_str));
   }
 
   // Jason::Debug::Temp
