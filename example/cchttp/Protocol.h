@@ -22,37 +22,19 @@
  */
 
 #pragma once
-#define _GNU_SOURCE /* To get defns of NI_MAXSERV and NI_MAXHOST */
-#define MY_DEBUG_LEVEL 4      // 0-5
+#define _GNU_SOURCE      /* To get defns of NI_MAXSERV and NI_MAXHOST */
+#define MY_DEBUG_LEVEL 4 // 0-5
 
 #include <unistd.h>
-// #include <stdio.h>
-// #include <stdlib.h>
-// #include <limits.h>
-// #include <string.h>
-// #include <assert.h>
-// #include <time.h>
-// #include <sys/time.h>
-// #include <sys/types.h>
-
 #include <math.h>
 #include <inttypes.h>
 #include <arpa/inet.h>
+#include <sys/time.h>
 
 #include <ts/ts.h>
 // #include "net.h"
 
 // #include <queue>
-
-// #include <unistd.h>
-// #include <errno.h>
-// #include <netdb.h>
-// #include <sys/socket.h>
-// #include <netinet/in.h>
-// #include <arpa/inet.h>
-
-// #include <ifaddrs.h>
-// #include <linux/if_link.h>
 
 #define PLUGIN_NAME "echttp"
 
@@ -74,8 +56,7 @@
 #define EC_STATUS_PEER_RESP_READY 1
 // #define EC_STATUS_RESP_READY 2
 // #define EC_STATUS_ALL_READY 3
-#define TXN_WAIT_FOR_CLEAN 2 
-
+#define TXN_WAIT_FOR_CLEAN 2
 
 typedef struct _EcPeer {
   char *addr_str;
@@ -85,9 +66,8 @@ typedef struct _EcPeer {
   int index;
 } EcPeer;
 
-
 /*
-// this is used for echttp, however, this is not implemented at this time 
+// this is used for echttp, however, this is not implemented at this time
 class EcConnectionPool
 {
 public:
@@ -109,31 +89,33 @@ private:
 }
 */
 
-struct _TxnData; 
-struct _PeerConnData; 
+struct _TxnData;
+struct _PeerConnData;
 typedef struct _SsnData {
   // TSMutex mtx;
   // TSVConn *vconns;
   // TSCont *contps;
-  struct _PeerConnData *pcds; 
+  struct _PeerConnData *pcds;
   volatile int n_connected_peers;
   struct _TxnData *current_txn_data;
 
 } SsnData;
 
-
 typedef struct _TxnData {
   TSHttpTxn txnp;
-  TSCont contp; 
+  TSCont contp;
+  // int64_t ssn_id;
+  // int64_t txn_id;
+  char ssn_txn_id[32];
 
   // TSMutex mtx;
   // TSAction pending_action;
   // TxnSMHandler current_handler;
 
   volatile int16_t n_available_peers; // __builtin_popcount
-  volatile int64_t ready_peers;     // use the bit of a 64-bit integer to represent peers
-  
-  // TSIOBufferReader *peer_resp_readers; 
+  volatile int64_t ready_peers;       // use the bit of a 64-bit integer to represent peers
+
+  // TSIOBufferReader *peer_resp_readers;
   char **peer_resp_buf;
   char *final_resp;
 
@@ -149,9 +131,21 @@ typedef struct _TxnData {
   TSIOBuffer output_buffer;
   TSIOBufferReader output_reader;
 
-  int64_t osize; 
-  TSIOBuffer my_temp_buffer; 
-  TSIOBufferReader my_temp_reader; 
+  // stat
+  bool local_hit;
+
+  // timer
+  int64_t txn_start_ts;
+  int64_t local_finish_ts;
+  int64_t *chunk_arrival_ts;
+  int64_t decoding_start_ts;
+  int64_t decoding_finish_ts;
+  int64_t response_begin_ts;
+  int64_t txn_finish_ts;
+
+  int64_t osize;
+  TSIOBuffer my_temp_buffer;
+  TSIOBufferReader my_temp_reader;
 
 } TxnData;
 
@@ -162,13 +156,13 @@ typedef struct _PeerConnData {
   TSVIO write_vio;
   // TSIOBuffer request_buffer;
 
-  // needs to be initialized at txn start 
+  // needs to be initialized at txn start
   TSIOBuffer response_buffer;
   TSIOBufferReader response_buffer_reader;
 
   bool content_has_began;
-  int64_t content_length; 
-  int64_t read_in_length; 
+  int64_t content_length;
+  int64_t read_in_length;
 
   // char *request_string;
   // char *request, *response;
@@ -179,3 +173,57 @@ typedef struct _PeerConnData {
   // TSCont main_contp, contp;
 
 } PeerConnData;
+
+typedef enum _timeType {
+  TXN_START       = 1,
+  LOCAL_FINISH    = 2,
+  CHUNK_ARRIVAL   = 3,
+  DECODING_START  = 4,
+  DECODING_FINISH = 5,
+  RESPONSE_BEGIN  = 6,
+  TXN_FINISH      = 7
+} TimeType;
+
+static inline void
+record_time(TSTextLogObject log_obj, TxnData *txn_data, TimeType time_type, void *other_data)
+{
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  unsigned long time_in_micro = 1000000 * tv.tv_sec + tv.tv_usec;
+
+  switch (time_type) {
+  case TXN_START:
+    txn_data->txn_start_ts = time_in_micro;
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s TxnStart %ld\n", txn_data->ssn_txn_id, time_in_micro);
+    break;
+  case LOCAL_FINISH:
+    txn_data->local_finish_ts = time_in_micro - txn_data->txn_start_ts;
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s LocalFinish %ld\n", txn_data->ssn_txn_id, txn_data->local_finish_ts);
+    break;
+  case CHUNK_ARRIVAL:;
+    int64_t chunk_id                     = (int64_t)(other_data);
+    txn_data->chunk_arrival_ts[chunk_id] = time_in_micro - txn_data->txn_start_ts;
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s ChunkArrival chunk %ld: %ld\n", txn_data->ssn_txn_id, chunk_id,
+                         txn_data->chunk_arrival_ts[chunk_id]);
+    break;
+  case DECODING_START:
+    txn_data->decoding_start_ts = time_in_micro - txn_data->txn_start_ts;
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s DecodingStart %ld\n", txn_data->ssn_txn_id, txn_data->decoding_start_ts);
+    break;
+  case DECODING_FINISH:
+    txn_data->decoding_finish_ts = time_in_micro - txn_data->txn_start_ts;
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s DecodingFinish %ld\n", txn_data->ssn_txn_id, txn_data->decoding_finish_ts);
+    break;
+  case RESPONSE_BEGIN:
+    txn_data->response_begin_ts = time_in_micro - txn_data->txn_start_ts;
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s RespBegin %ld\n", txn_data->ssn_txn_id, txn_data->response_begin_ts);
+    break;
+  case TXN_FINISH:
+    txn_data->txn_finish_ts = time_in_micro - txn_data->txn_start_ts;
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s TxnFinish %ld\n", txn_data->ssn_txn_id, txn_data->txn_finish_ts);
+    break;
+    default:
+    TSAssert(false); 
+    break; 
+  }
+}

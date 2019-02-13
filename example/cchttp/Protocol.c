@@ -95,7 +95,7 @@ transaction_handler(TSCont contp, TSEvent event, void *edata)
   // if (event == EC_EVENT_K_BACK)
   //   TSDebug(PLUGIN_NAME, "transaction_handler: txn %" PRId64 " received EC_EVENT_K_BACK", TSHttpTxnIdGet(txnp));
   // else
-  TSDebug(PLUGIN_NAME, "transaction_handler: txn %" PRId64 " received %s", TSHttpTxnIdGet(txnp), TSHttpEventNameLookup(event));
+  TSDebug(PLUGIN_NAME, "transaction_handler: txn %" PRId64 " received %s (%d)", TSHttpTxnIdGet(txnp), TSHttpEventNameLookup(event), event);
 
   switch (event) {
   // TS_HTTP_POST_REMAP_HOOK
@@ -238,7 +238,7 @@ session_handler(TSCont contp, TSEvent event, void *edata)
 {
   TSHttpSsn ssnp = (TSHttpSsn)edata;
 
-  TSDebug(PLUGIN_NAME, "session_handler:  ssn %" PRId64 " receive %s", TSHttpSsnIdGet(ssnp), TSHttpEventNameLookup(event));
+  TSDebug(PLUGIN_NAME, "session_handler:  ssn %" PRId64 " receive %s (%d)", TSHttpSsnIdGet(ssnp), TSHttpEventNameLookup(event), event);
   switch (event) {
   case TS_EVENT_HTTP_SSN_START:
 
@@ -323,9 +323,14 @@ TSPluginInit(int argc, const char *argv[])
     TSError("[%s] Failed to create log", PLUGIN_NAME);
   }
 
-  /* format of the log entries, for caching_status, 1 for HIT and 0 for MISS */
-  if (TSTextLogObjectWrite(protocol_plugin_log, "timestamp filename servername caching_status\n\n") != TS_SUCCESS) {
-    TSError("[%s] Failed to write into log", PLUGIN_NAME);
+
+  CHECK(TSTextLogObjectWrite(protocol_plugin_log, "# myip "));
+  for (int i=0; i<n_myips; i++){
+    CHECK(TSTextLogObjectWrite(protocol_plugin_log, "%s ", convert_ip_to_str(myips[i])));
+  }
+  CHECK(TSTextLogObjectWrite(protocol_plugin_log, "# peers "));
+  for (int i = 0; i < n_peers; i++) {
+    CHECK(TSTextLogObjectWrite(protocol_plugin_log, "%s ", ec_peers[i].addr_str));
   }
 
   // Jason::Debug::Temp

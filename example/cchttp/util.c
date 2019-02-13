@@ -75,6 +75,12 @@ get_my_ip(int *ips)
   return ips_pos;
 }
 
+char* convert_ip_to_str(int ip){
+  static char ip_str[16]; 
+  sprintf(ip_str, "%u.%u.%u.%u", ip>>24, ip<<8>>24, ip<<16>>24, ip<<24>>24); 
+  return ip_str; 
+}
+
 /* check a given ip address is my ip or not */
 int
 is_my_ip(int ip, int *ips, int n_ips)
@@ -116,3 +122,4 @@ print_reader(const char *plugin_name, TSIOBufferReader reader)
   TSDebug(PLUGIN_NAME, "print_reader: avail %ld, %ld, %ld,reader %s", avail, avail2, avail3, c);
   TSfree(c); 
 }
+

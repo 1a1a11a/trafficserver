@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ts/ts.h"
-#include "Protocol.h"
 #include "util.h"
 
 void handle_transform(TSCont contp, TxnData *txn_data);

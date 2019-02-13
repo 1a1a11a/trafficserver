@@ -76,6 +76,7 @@
 
 
 int get_my_ip(int *ips);
+char *convert_ip_to_str(int ip); 
 int is_my_ip(int ip, int *ips, int n_ips);
 void printbits(int64_t x);
 char *int64_to_bitstring_static(int64_t x);
