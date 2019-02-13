@@ -95,6 +95,7 @@ setup_txn(TSCont contp, TSHttpTxn txnp)
   txn_data->txnp = txnp;
   sprintf(txn_data->ssn_txn_id, "%ld-%ld", TSHttpSsnIdGet(ssnp), TSHttpTxnIdGet(txnp));
   txn_data->status                 = EC_STATUS_BEGIN;
+  txn_data->transform_mtx = TSMutexCreate(); 
   txn_data->final_resp             = NULL;
   txn_data->request_path_component = NULL;
   // Jason::Optimize::maybe EC_k + EC_x - 1
@@ -435,7 +436,7 @@ EC_K_back(TSHttpTxn txnp)
     if (current_peer_available > 0) {
       available_peers++;
       final_size += strlen(txn_data->peer_resp_buf[i]);
-      TSDebug(PLUGIN_NAME, "EC_K_back: txn %s response %d %s", txn_data->ssn_txn_id, i, txn_data->peer_resp_buf[i]);
+      TSDebug(PLUGIN_NAME, "EC_K_back: txn %s peer %d response %s", txn_data->ssn_txn_id, i, txn_data->peer_resp_buf[i]);
     }
   }
   TSAssert(available_peers >= EC_k - 1);
@@ -449,5 +450,12 @@ EC_K_back(TSHttpTxn txnp)
     }
   }
   TSDebug(PLUGIN_NAME, "EC_K_back: txn %s final resp %s", txn_data->ssn_txn_id, txn_data->final_resp);
+
+
+  // Jason::Optimize::using atomic op might be more efficient 
+  TSMutexLock(txn_data->transform_mtx);
   txn_data->status = EC_STATUS_PEER_RESP_READY;
+  if (txn_data->transform_contp)
+    TSContCall(txn_data->transform_contp, TS_EVENT_VCONN_WRITE_READY, NULL);
+  TSMutexUnlock(txn_data->transform_mtx);
 }

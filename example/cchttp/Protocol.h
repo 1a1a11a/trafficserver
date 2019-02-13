@@ -104,6 +104,9 @@ typedef struct _SsnData {
 typedef struct _TxnData {
   TSHttpTxn txnp;
   TSCont contp;
+
+  TSMutex transform_mtx; 
+  TSCont transform_contp; 
   // int64_t ssn_id;
   // int64_t txn_id;
   char ssn_txn_id[32];

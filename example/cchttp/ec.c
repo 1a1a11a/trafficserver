@@ -125,7 +125,10 @@ handle_transform0(TSCont contp, TxnData *txn_data)
 
   if (txn_data->status != EC_STATUS_PEER_RESP_READY) {
     TSDebug(PLUGIN_NAME, "handle_transform: txn %s wait for peer response", txn_data->ssn_txn_id);
-    TSContSchedule(contp, 1, TS_THREAD_POOL_DEFAULT); 
+    TSMutexLock(txn_data->transform_mtx); 
+    txn_data->transform_contp = contp; 
+    TSMutexUnlock(txn_data->transform_mtx); 
+    // TSContSchedule(contp, 1, TS_THREAD_POOL_DEFAULT); 
     return;
   }
 
