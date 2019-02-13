@@ -98,8 +98,7 @@ transaction_handler(TSCont contp, TSEvent event, void *edata)
   TSDebug(PLUGIN_NAME, "transaction_handler: txn %" PRId64 " received %s (%d)", TSHttpTxnIdGet(txnp), TSHttpEventNameLookup(event), event);
 
   switch (event) {
-  // TS_HTTP_POST_REMAP_HOOK
-  case TS_EVENT_HTTP_POST_REMAP:
+  case TS_EVENT_HTTP_TXN_START:
     TSHttpTxnUntransformedRespCache(txnp, 1);
     TSHttpTxnTransformedRespCache(txnp, 0);
     setup_txn(contp, txnp);
@@ -113,6 +112,23 @@ transaction_handler(TSCont contp, TSEvent event, void *edata)
     TSVConn vconn = TSTransformCreate(RS_resp_transform_handler, txnp);
     TSContDataSet(vconn, txn_data);
     TSHttpTxnHookAdd(txnp, TS_HTTP_RESPONSE_TRANSFORM_HOOK, vconn);
+
+    break;
+  case TS_EVENT_HTTP_POST_REMAP:
+    conn_peer(contp, txnp); 
+    // TSHttpTxnUntransformedRespCache(txnp, 1);
+    // TSHttpTxnTransformedRespCache(txnp, 0);
+    // setup_txn(contp, txnp);
+    // txn_data        = TSHttpTxnArgGet(txnp, txn_data_ind);
+    // txn_data->contp = contp;
+
+    // /* if we need to go through codding */
+    // TSHttpSsn ssnp = TSHttpTxnSsnGet(txnp);
+    // TSHttpSsnHookAdd(ssnp, TS_HTTP_TXN_CLOSE_HOOK, contp);
+
+    // TSVConn vconn = TSTransformCreate(RS_resp_transform_handler, txnp);
+    // TSContDataSet(vconn, txn_data);
+    // TSHttpTxnHookAdd(txnp, TS_HTTP_RESPONSE_TRANSFORM_HOOK, vconn);
 
     // TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
     break;
@@ -347,6 +363,7 @@ TSPluginInit(int argc, const char *argv[])
   TSHttpHookAdd(TS_HTTP_SSN_START_HOOK, ssn_contp);
   TSHttpHookAdd(TS_HTTP_SSN_CLOSE_HOOK, ssn_contp);
 
+  TSHttpHookAdd(TS_HTTP_TXN_START_HOOK, contp);
   TSHttpHookAdd(TS_HTTP_POST_REMAP_HOOK, contp);
 
   TSDebug(PLUGIN_NAME, "initialization finish");

@@ -127,6 +127,16 @@ setup_txn(TSCont contp, TSHttpTxn txnp)
     // ssn_data->pcds[i].response_buffer_reader = TSIOBufferReaderAlloc(ssn_data->pcds[i].response_buffer);
     // CHECKNULL(ssn_data->pcds[i].response_buffer_reader);
   }
+  return TS_SUCCESS;
+}
+
+TSReturnCode
+conn_peer(TSCont contp, TSHttpTxn txnp)
+{
+  TSHttpSsn ssnp    = TSHttpTxnSsnGet(txnp);
+  SsnData *ssn_data = TSHttpSsnArgGet(ssnp, ssn_data_ind);
+  TxnData *txn_data = TSHttpTxnArgGet(txnp, txn_data_ind);
+
   TSMBuffer bufp;
   TSMLoc hdr_loc, url_loc;
   const char *path;
