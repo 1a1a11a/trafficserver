@@ -84,23 +84,23 @@ clean_ssn(TSHttpSsn ssnp, int n_peers)
 }
 
 TSReturnCode
-setup_txn(TSCont contp, TSHttpTxn txnp)
+setup_txn(TSHttpTxn txnp)
 {
-  TSHttpSsn ssnp             = TSHttpTxnSsnGet(txnp);
-  SsnData *ssn_data          = TSHttpSsnArgGet(ssnp, ssn_data_ind);
-  TxnData *txn_data          = (TxnData *)TSmalloc(sizeof(TxnData));
-  memset(txn_data, 0, sizeof(TxnData)); 
+  TSHttpSsn ssnp    = TSHttpTxnSsnGet(txnp);
+  SsnData *ssn_data = TSHttpSsnArgGet(ssnp, ssn_data_ind);
+  TxnData *txn_data = (TxnData *)TSmalloc(sizeof(TxnData));
+  memset(txn_data, 0, sizeof(TxnData));
   ssn_data->current_txn_data = txn_data;
 
   txn_data->txnp = txnp;
   sprintf(txn_data->ssn_txn_id, "%ld-%ld", TSHttpSsnIdGet(ssnp), TSHttpTxnIdGet(txnp));
   txn_data->status                 = EC_STATUS_BEGIN;
-  txn_data->transform_mtx = TSMutexCreate(); 
+  txn_data->transform_mtx          = TSMutexCreate();
   txn_data->final_resp             = NULL;
   txn_data->request_path_component = NULL;
   // Jason::Optimize::maybe EC_k + EC_x - 1
-  txn_data->chunk_arrival_ts = (int64_t*) TSmalloc(sizeof(int64_t) * (EC_k + EC_x)); 
-  txn_data->peer_resp_buf          = (char **)TSmalloc(sizeof(char *) * (EC_k + EC_x - 1));
+  txn_data->chunk_arrival_ts = (int64_t *)TSmalloc(sizeof(int64_t) * (EC_k + EC_x));
+  txn_data->peer_resp_buf    = (char **)TSmalloc(sizeof(char *) * (EC_k + EC_x - 1));
   // Jason::Optimize:: move to ssn should improve performance
   // txn_data->peer_resp_readers      = (TSIOBufferReader *)TSmalloc(sizeof(TSIOBufferReader) * (EC_k + EC_x - 1));
   txn_data->request_buffer_readers = (TSIOBufferReader *)TSmalloc(sizeof(TSIOBufferReader) * (EC_k + EC_x - 1));
@@ -169,7 +169,7 @@ conn_peer(TSCont contp, TSHttpTxn txnp)
   txn_data->request_string = (char *)TSmalloc(sizeof(char) * (path_length + 256));
   // sprintf(txn_data->request_string, "GET /size/12800 HTTP/1.1\r\nHost: d30.jasony.me:8080\r\n\r\n",
   //         txn_data->request_path_component);
-  sprintf(txn_data->request_string, "GET /%s-peerConn HTTP/1.1\r\nHost: d30.jasony.me:8080\r\n\r\n",
+  sprintf(txn_data->request_string, "GET /nosleep/%s-peerConn HTTP/1.1\r\nHost: d30.jasony.me:8080\r\n\r\n",
           txn_data->request_path_component);
   txn_data->request_buffer = TSIOBufferCreate();
   CHECKNULL(txn_data->request_buffer);
@@ -195,11 +195,14 @@ clean_txn(TSCont contp, TSHttpTxn txnp)
   TxnData *txn_data = TSHttpTxnArgGet(txnp, txn_data_ind);
   //   TSHttpSsn ssnp    = TSHttpTxnSsnGet(txnp);
   //   SsnData *ssn_data = TSHttpSsnArgGet(ssnp, ssn_data_ind);
-  TSIOBufferDestroy(txn_data->request_buffer);
+  if (txn_data->request_buffer) {
+    TSIOBufferDestroy(txn_data->request_buffer);
+  }
   for (int i = 0; i < EC_k + EC_x - 1; i++) {
     if (txn_data->peer_resp_buf[i])
       TSfree(txn_data->peer_resp_buf[i]);
-    TSIOBufferReaderFree(txn_data->request_buffer_readers[i]);
+    if (txn_data->request_buffer_readers[i])
+      TSIOBufferReaderFree(txn_data->request_buffer_readers[i]);
     // TSIOBufferReaderFree(txn_data->peer_resp_readers[i]);
     // Jason::TODO::Do I have to do this?
     // TSIOBufferDestroy(ssn_data->pcds[i].response_buffer);
@@ -234,15 +237,13 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
   //   txn_id = TSHttpTxnIdGet(txn_data->txnp);
 
   if (event == EC_EVENT_PEER_BEGIN_WRITE)
-    TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d receives EC_EVENT_PEER_BEGIN_WRITE", txn_data->ssn_txn_id,
-            peer->index);
-  else{
+    TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d receives EC_EVENT_PEER_BEGIN_WRITE", txn_data->ssn_txn_id, peer->index);
+  else {
     if (txn_data == NULL)
-      TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d receives %s", "x-x", peer->index,
-              TSHttpEventNameLookup(event));
+      TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d receives %s", "x-x", peer->index, TSHttpEventNameLookup(event));
     else
       TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d receives %s", txn_data->ssn_txn_id, peer->index,
-            TSHttpEventNameLookup(event));
+              TSHttpEventNameLookup(event));
   }
 
   switch (event) {
@@ -258,8 +259,8 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
     int n_connected_peers = __sync_add_and_fetch(&(ssn_data->n_connected_peers), 1);
     pcd->vconn            = (TSVConn)edata;
     // TSMutexUnlock(ssn_data->mtx);
-    TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d (%s) Net Connect, %d peers have connected", "x-x",
-            peer->index, peer->addr_str, n_connected_peers);
+    TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d (%s) Net Connect, %d peers have connected", "x-x", peer->index,
+            peer->addr_str, n_connected_peers);
     break;
 
   case EC_EVENT_PEER_BEGIN_WRITE:
@@ -269,6 +270,7 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
     txn_data->request_buffer_readers[peer->index] = TSIOBufferReaderAlloc(txn_data->request_buffer);
     CHECKNULL(txn_data->request_buffer_readers[peer->index]);
 
+    memset(pcd->concat_response, 0, 65);
     pcd->write_vio =
       TSVConnWrite(pcd->vconn, contp, txn_data->request_buffer_readers[peer->index], strlen(txn_data->request_string));
     break;
@@ -285,10 +287,14 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
     break;
 
   case TS_EVENT_VCONN_EOS:
+    // TSAssert(false);
+    break;
   case TS_EVENT_VCONN_READ_COMPLETE:
-    ;
+    // this can happen if TS_EVENT_VCONN_EOS comes after TS_EVENT_VCONN_READ_COMPLETE
+    if (txn_data == NULL || txn_data->status >= EC_STATUS_PEER_RESP_READY)
+      break;
     // when the other peers support persistent connection, this can also be called
-    record_time(protocol_plugin_log, txn_data, CHUNK_ARRIVAL, (void*)(int64_t)(peer->index));
+    record_time(protocol_plugin_log, txn_data, CHUNK_ARRIVAL, (void *)(int64_t)(peer->index));
 
     int n_available     = __sync_add_and_fetch(&(txn_data->n_available_peers), 1);
     int64_t ready_peers = __sync_or_and_fetch(&(txn_data->ready_peers), (1 << peer->index));
@@ -333,30 +339,78 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
           TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d received %s", txn_data->ssn_txn_id, peer->index, temp);
           TSfree(temp);
         }
+
         if (txn_data->peer_resp_buf[peer->index] == NULL) {
-          // now find the size of incoming request
+          // now find the size of current packet
           char *cp = strstr(response_str, "Content-Length");
-          if (cp && cp - response_str + 15 < n_read) {
-            pcd->content_length                  = strtol(cp + 15, NULL, 10);
+          if (cp) {
+            // flask response header is separated by \r without \n???
+            char *end_of_content_length = strstr(cp, "\r\n");
+            TSDebug(PLUGIN_NAME, "cp %p end %p, len %ld n_read %ld %ld/%ld", cp, end_of_content_length, end_of_content_length - cp,
+                    n_read, cp - response_str + 15, end_of_content_length - response_str);
+            if (cp - response_str + 15 < n_read && end_of_content_length && end_of_content_length - response_str < n_read) {
+              pcd->content_length = strtol(cp + 15, NULL, 10);
+            } else
+              cp = NULL;
+          }
+          // cp can change in the last if, so DON'T use else
+          if (cp == NULL) {
+            // not in current packet, how about the last 16 Bytes of last packet and first 16 Bytes of current packet
+            TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d didn't find Content-Length in current packet",
+                    txn_data->ssn_txn_id, peer->index);
+            // put in the first 16 bytes from current packet
+            memcpy(pcd->concat_response + 32, response_str, 32);
+            cp = strstr(pcd->concat_response, "Content-Length");
+            if (cp) {
+              pcd->content_length = strtol(cp + 15, NULL, 10);
+              TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d find Content-Length in concatenated packet %s",
+                      txn_data->ssn_txn_id, peer->index, pcd->concat_response);
+            } else {
+              // still not found, copy the last 32 bytes of current packet to the first 32 Bytes of concat_response
+              memcpy(pcd->concat_response, response_str + n_read - 32, 32);
+              TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d did not find Content-Length in concatenated packet",
+                      txn_data->ssn_txn_id, peer->index);
+            }
+          }
+          if (pcd->content_length != 0) {
             txn_data->peer_resp_buf[peer->index] = TSmalloc(sizeof(char) * pcd->content_length + 1); // add one for NULL
             CHECKNULL(txn_data->peer_resp_buf[peer->index]);
             txn_data->peer_resp_buf[peer->index][0] = '\0';
             TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d find and allocate size %" PRId64 " buffer for peer response",
                     txn_data->ssn_txn_id, peer->index, pcd->content_length);
-          } else {
-            // char *temp = TSstrndup(response_str, n_read);
-            TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d didn't find Content-Length", txn_data->ssn_txn_id, peer->index);
-            // TSfree(temp);
+            memset(pcd->concat_response, 0, 65);
           }
         }
 
         if (txn_data->peer_resp_buf[peer->index] != NULL) {
           char *find_loc = strstr(response_str, "\r\n\r\n");
           // new
-          if ((!pcd->content_has_began) && (find_loc != NULL) && (find_loc - response_str <= n_read)) {
-            pcd->content_has_began = true;
-            n_read -= strstr(response_str, "\r\n\r\n") + 4 - response_str;
-            response_str = strstr(response_str, "\r\n\r\n") + 4;
+          if (!pcd->content_has_began) {
+            if ((find_loc != NULL) && (find_loc + 4 - response_str <= n_read)) {
+              TSDebug(PLUGIN_NAME, "set content_has_began, %ld %ld", find_loc - response_str,n_read); 
+              pcd->content_has_began = true;
+              n_read -= strstr(response_str, "\r\n\r\n") + 4 - response_str;
+              response_str = strstr(response_str, "\r\n\r\n") + 4;
+            } else {
+              /* we have found Content-Length, but \r\n\r\n has not been found,
+               * check concatenatd response
+               * if not,
+               * it might be partially in this read and partially in next read, save the last four Bytes
+               */
+              memcpy(pcd->concat_response + 4, response_str, 4);
+              if (strstr(pcd->concat_response, "\r\n\r\n")) {
+                // content has begin in this read, find begin pos
+                pcd->content_has_began = true;
+                int new_pos = 0; 
+                while ((response_str[new_pos] == '\r' || response_str[new_pos] == '\n') && new_pos < 6)
+                  new_pos++; 
+                TSDebug(PLUGIN_NAME, "Update new_pos %d", new_pos); 
+                n_read -= new_pos;
+                response_str += new_pos;
+              } else
+                // copy the last four Bytes
+                memcpy(pcd->concat_response, response_str + n_read - 4, 4);
+            }
           }
 
           if (pcd->content_has_began && n_read > 0) {
@@ -373,13 +427,14 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
             } else if (n_read == 0)
               ;
             else {
-              TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d ERROR n_read less than 0, n_read %" PRId64,
-                      txn_data->ssn_txn_id, peer->index, n_read);
+              TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d content has began %d ERROR n_read less than 0, n_read %" PRId64,
+                      txn_data->ssn_txn_id, peer->index, pcd->content_has_began, n_read);
               response_str = TSIOBufferBlockReadStart(block, pcd->response_buffer_reader, &n_read);
               char *temp   = TSstrndup(response_str, n_read);
               TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d n_read %" PRId64 ", read in %s", txn_data->ssn_txn_id,
                       peer->index, n_read, temp);
               TSfree(temp);
+              TSAssert(false);
             }
           }
         }
@@ -451,8 +506,7 @@ EC_K_back(TSHttpTxn txnp)
   }
   TSDebug(PLUGIN_NAME, "EC_K_back: txn %s final resp %s", txn_data->ssn_txn_id, txn_data->final_resp);
 
-
-  // Jason::Optimize::using atomic op might be more efficient 
+  // Jason::Optimize::using atomic op might be more efficient
   TSMutexLock(txn_data->transform_mtx);
   txn_data->status = EC_STATUS_PEER_RESP_READY;
   if (txn_data->transform_contp)

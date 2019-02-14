@@ -52,11 +52,19 @@
 
 // #define EC_EVENT_K_BACK 102400
 
-#define EC_STATUS_BEGIN 0
-#define EC_STATUS_PEER_RESP_READY 1
-// #define EC_STATUS_RESP_READY 2
-// #define EC_STATUS_ALL_READY 3
-#define TXN_WAIT_FOR_CLEAN 2
+// #define EC_STATUS_BEGIN 0
+// #define EC_STATUS_PEER_RESP_READY 1
+// // #define EC_STATUS_RESP_READY 2
+// // #define EC_STATUS_ALL_READY 3
+// #define TXN_WAIT_FOR_CLEAN 2
+
+
+typedef enum _EC_status{
+  EC_STATUS_BEGIN, 
+  EC_STATUS_PEER_RESP_READY, 
+  TXN_WAIT_FOR_CLEAN
+}EcStatus; 
+
 
 typedef struct _EcPeer {
   char *addr_str;
@@ -109,20 +117,17 @@ typedef struct _TxnData {
   TSCont transform_contp; 
   // int64_t ssn_id;
   // int64_t txn_id;
-  char ssn_txn_id[32];
+  char ssn_txn_id[16];
 
-  // TSMutex mtx;
-  // TSAction pending_action;
-  // TxnSMHandler current_handler;
+
 
   volatile int16_t n_available_peers; // __builtin_popcount
   volatile int64_t ready_peers;       // use the bit of a 64-bit integer to represent peers
 
-  // TSIOBufferReader *peer_resp_readers;
   char **peer_resp_buf;
   char *final_resp;
 
-  int status;
+  EcStatus status;
 
   char *request_path_component;
   char *request_string;
@@ -159,6 +164,9 @@ typedef struct _PeerConnData {
   TSVIO read_vio;
   TSVIO write_vio;
   // TSIOBuffer request_buffer;
+
+  // save partial of previous response to find Content-Length
+  char concat_response[65];
 
   // needs to be initialized at txn start
   TSIOBuffer response_buffer;
