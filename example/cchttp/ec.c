@@ -123,14 +123,15 @@ handle_transform0(TSCont contp, TxnData *txn_data)
   if (txn_data->local_finish_ts == 0)
     record_time(protocol_plugin_log, txn_data, LOCAL_FINISH, NULL);
 
+  TSMutexLock(txn_data->transform_mtx);
   if (txn_data->status != EC_STATUS_PEER_RESP_READY) {
     TSDebug(PLUGIN_NAME, "handle_transform: txn %s wait for peer response", txn_data->ssn_txn_id);
-    TSMutexLock(txn_data->transform_mtx); 
-    txn_data->transform_contp = contp; 
-    TSMutexUnlock(txn_data->transform_mtx); 
-    // TSContSchedule(contp, 1, TS_THREAD_POOL_DEFAULT); 
+    txn_data->transform_contp = contp;
+    TSMutexUnlock(txn_data->transform_mtx);
+    // TSContSchedule(contp, 1, TS_THREAD_POOL_DEFAULT);
     return;
   }
+  TSMutexUnlock(txn_data->transform_mtx);
 
   record_time(protocol_plugin_log, txn_data, DECODING_START, NULL);
   record_time(protocol_plugin_log, txn_data, DECODING_FINISH, NULL);
@@ -183,12 +184,19 @@ handle_transform0(TSCont contp, TxnData *txn_data)
     // TSIOBufferCopy(TSVIOBufferGet(txn_data->output_vio), TSVIOReaderGet(input_vio), towrite, 0);
     TSIOBufferReaderConsume(TSVIOReaderGet(input_vio), towrite);
     TSVIONDoneSet(input_vio, TSVIONDoneGet(input_vio) + towrite);
-    TSDebug(PLUGIN_NAME, "handle_transform: txn %s set NDone to %" PRId64, txn_data->ssn_txn_id, TSVIONDoneGet(input_vio));
 
     txn_data->osize += towrite;
-    TSDebug(PLUGIN_NAME, "handle_transform: txn %s add response from current node, osize %" PRId64 " new buffer ",
-            txn_data->ssn_txn_id, txn_data->osize);
+    // TSDebug(PLUGIN_NAME, "write %ld Bytes", TSIOBufferWrite(TSVIOBufferGet(input_vio), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 31));
     // print_reader(PLUGIN_NAME, TSIOBufferReaderAlloc(txn_data->my_temp_buffer));
+
+    TSVIONBytesSet(txn_data->output_vio, txn_data->osize);
+    TSVIOReenable(txn_data->output_vio);
+
+    TSDebug(
+      PLUGIN_NAME,
+      "handle_transform: txn %s set input NDone from %ld to %ld, consume %ld Bytes, set output NBytes %ld, total output size %ld",
+      txn_data->ssn_txn_id, TSVIONDoneGet(input_vio) - towrite, TSVIONDoneGet(input_vio), towrite, txn_data->osize,
+      txn_data->osize);
   }
 
   // if (towrite <= 0){
@@ -201,15 +209,18 @@ handle_transform0(TSCont contp, TxnData *txn_data)
   if (TSVIONTodoGet(input_vio) > 0) {
     if (towrite > 0) {
       TSDebug(PLUGIN_NAME, "handle_transform: txn %s more to read from input_vio", txn_data->ssn_txn_id);
-      TSVIOReenable(txn_data->output_vio);
+      // TSVIONBytesSet(txn_data->output_vio, txn_data->osize);
+      // TSVIOReenable(txn_data->output_vio);
       TSContCall(TSVIOContGet(input_vio), TS_EVENT_VCONN_WRITE_READY, input_vio);
-    } else
-      TSAssert(false);
+    } else {
+      TSDebug(PLUGIN_NAME, "let me wait ");
+      // TSAssert(false);
+    }
   } else {
     TSDebug(PLUGIN_NAME, "handle_transform: txn %s none to read from input_vio, all writes done, set %" PRId64 " bytes for output",
             txn_data->ssn_txn_id, txn_data->osize);
-    TSVIONBytesSet(txn_data->output_vio, txn_data->osize);
-    TSVIOReenable(txn_data->output_vio);
+    // TSVIONBytesSet(txn_data->output_vio, txn_data->osize);
+    // TSVIOReenable(txn_data->output_vio);
     TSContCall(TSVIOContGet(input_vio), TS_EVENT_VCONN_WRITE_COMPLETE, input_vio);
   }
 
