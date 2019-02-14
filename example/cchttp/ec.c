@@ -116,10 +116,16 @@ handle_transform0(TSCont contp, TxnData *txn_data)
    * and initialize its internals.
    */
 
-  // if (txn_data->output_vio == NULL) {
-  //   TSDebug(PLUGIN_NAME, "handle_transform: txn %"PRId64 " setup output_vio", txn_id);
-  //   // txn_data->output_vio = TSVConnWrite(output_conn, contp, txn_data->output_reader, INT64_MAX);
-  // }
+
+  buf_test = TSVIOBufferGet(input_vio);
+
+  if (!buf_test) {
+    TSDebug(PLUGIN_NAME, "handle_transform: txn %s buf_test", txn_data->ssn_txn_id);
+    TSVIONBytesSet(txn_data->output_vio, txn_data->osize);
+    TSVIOReenable(txn_data->output_vio);
+    return;
+  }
+
   if (txn_data->local_finish_ts == 0)
     record_time(protocol_plugin_log, txn_data, LOCAL_FINISH, NULL);
 
@@ -133,9 +139,10 @@ handle_transform0(TSCont contp, TxnData *txn_data)
   }
   TSMutexUnlock(txn_data->transform_mtx);
 
-  record_time(protocol_plugin_log, txn_data, DECODING_START, NULL);
-  record_time(protocol_plugin_log, txn_data, DECODING_FINISH, NULL);
-  record_time(protocol_plugin_log, txn_data, RESPONSE_BEGIN, NULL);
+
+
+
+
 
   if (txn_data->my_temp_reader == NULL) {
     TSDebug(PLUGIN_NAME, "handle_transform: txn %s create response temp buffer, peer final response %s", txn_data->ssn_txn_id,
@@ -147,24 +154,14 @@ handle_transform0(TSCont contp, TxnData *txn_data)
     TSIOBufferWrite(txn_data->my_temp_buffer, "||", 2);
     TSIOBufferWrite(txn_data->my_temp_buffer, txn_data->final_resp, strlen(txn_data->final_resp));
     TSDebug(PLUGIN_NAME, "handle_transform: txn %s done creating response temp buffer, current buffer ", txn_data->ssn_txn_id);
-    // print_reader(PLUGIN_NAME, TSIOBufferReaderAlloc(txn_data->my_temp_buffer));
+
+    record_time(protocol_plugin_log, txn_data, DECODING_START, NULL);
+    // DO RS
+    record_time(protocol_plugin_log, txn_data, DECODING_FINISH, NULL);
   }
 
-  // if (txn_data->output_vio){
-  //   TSVIOReenable(txn_data->output_vio);
-  //   return;
-  // }
+  record_time(protocol_plugin_log, txn_data, RESPONSE_BEGIN, NULL);
 
-  buf_test = TSVIOBufferGet(input_vio);
-
-  if (!buf_test) {
-    TSDebug(PLUGIN_NAME, "handle_transform: txn %s buf_test", txn_data->ssn_txn_id);
-    TSVIONBytesSet(txn_data->output_vio, txn_data->osize);
-    TSVIOReenable(txn_data->output_vio);
-    return;
-  }
-
-  // DO RS
 
   towrite = TSVIONTodoGet(input_vio);
   // need to check here, if towrite is 0, there is no reader to get from input_vio

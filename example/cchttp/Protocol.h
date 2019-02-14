@@ -221,7 +221,7 @@ record_time(TSTextLogObject log_obj, TxnData *txn_data, TimeType time_type, void
     ;
     int64_t chunk_id                     = (int64_t)(other_data);
     txn_data->chunk_arrival_ts[chunk_id] = time_in_micro - txn_data->txn_start_ts;
-    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s ChunkArrival chunk %ld: %ld", txn_data->ssn_txn_id, chunk_id,
+    TSTextLogObjectWrite(log_obj, "Ssn-Txn %s ChunkArrival%ld: %ld", txn_data->ssn_txn_id, chunk_id,
                          txn_data->chunk_arrival_ts[chunk_id]);
     break;
   case DECODING_START:

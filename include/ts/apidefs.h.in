@@ -498,8 +498,7 @@ typedef enum {
   TS_EVENT_MGMT_UPDATE                          = 60300,
 
 
-  EC_EVENT_PEER_BEGIN_WRITE = 12344,
-  EC_EVENT_K_BACK = 12345
+  EC_EVENT_PEER_BEGIN_WRITE = 12344
 } TSEvent;
 #define TS_EVENT_HTTP_READ_REQUEST_PRE_REMAP TS_EVENT_HTTP_PRE_REMAP /* backwards compat */
 
