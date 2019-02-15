@@ -36,6 +36,15 @@
 
 // #include <queue>
 
+#ifdef __GNUC__
+#define likely(x) __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+#else
+#define likely(x) (x)
+#define unlikely(x) (x)
+#endif
+
+
 #define PLUGIN_NAME "echttp"
 
 #define MAX_SERVER_NAME_LENGTH 1024
@@ -50,17 +59,12 @@
 
 #define EC_BUFFER_SIZE 16777216 // 16 MB
 
-// #define EC_EVENT_K_BACK 102400
 
-// #define EC_STATUS_BEGIN 0
-// #define EC_STATUS_PEER_RESP_READY 1
-// // #define EC_STATUS_RESP_READY 2
-// // #define EC_STATUS_ALL_READY 3
-// #define TXN_WAIT_FOR_CLEAN 2
 
 
 typedef enum _EC_status{
   EC_STATUS_BEGIN, 
+  EC_STATUS_LOCAL_FINISH, 
   EC_STATUS_PEER_RESP_READY, 
   TXN_WAIT_FOR_CLEAN
 }EcStatus; 
@@ -114,7 +118,10 @@ typedef struct _TxnData {
   TSCont contp;
 
   TSMutex transform_mtx; 
+  TSMutex txnp_mtx; 
   TSCont transform_contp; 
+
+  uint8_t reschedule_wait; 
   // int64_t ssn_id;
   // int64_t txn_id;
   char ssn_txn_id[16];

@@ -42,13 +42,11 @@ int ssn_data_ind;
 int txn_data_ind;
 
 TSCont global_ssn_contp;
-TSCont global_txn_contp; 
+TSCont global_txn_contp;
 
-
-  // static int get_my_ip(int *ips);
-  // static int is_my_ip(int ip, int *ips, int n_ips);
-  static int
-  load_ec_peer(int argc, const char **argv, EcPeer *ec_peers, int *myips, int n_myips);
+// static int get_my_ip(int *ips);
+// static int is_my_ip(int ip, int *ips, int n_ips);
+static int load_ec_peer(int argc, const char **argv, EcPeer *ec_peers, int *myips, int n_myips);
 static int transaction_handler(TSCont contp, TSEvent event, void *edata);
 
 /* load ec nodes from command line arguments,
@@ -100,19 +98,20 @@ transaction_handler(TSCont contp, TSEvent event, void *edata)
   // if (event == EC_EVENT_K_BACK)
   //   TSDebug(PLUGIN_NAME, "transaction_handler: txn %" PRId64 " received EC_EVENT_K_BACK", TSHttpTxnIdGet(txnp));
   // else
-  TSDebug(PLUGIN_NAME, "transaction_handler: txn %" PRId64 " received %s (%d)", TSHttpTxnIdGet(txnp), TSHttpEventNameLookup(event), event);
+  TSDebug(PLUGIN_NAME, "transaction_handler: txn %ld-%" PRId64 " received %s (%d)", TSHttpSsnIdGet(TSHttpTxnSsnGet(txnp)),
+          TSHttpTxnIdGet(txnp), TSHttpEventNameLookup(event), event);
 
   switch (event) {
-  case TS_EVENT_HTTP_TXN_START:
-    ;
+  case TS_EVENT_HTTP_TXN_START:;
 
     TSHttpTxnUntransformedRespCache(txnp, 1);
     TSHttpTxnTransformedRespCache(txnp, 0);
     setup_txn(txnp);
     txn_data        = TSHttpTxnArgGet(txnp, txn_data_ind);
     txn_data->contp = contp;
+    // txn_data->transform_mtx2 = TST
 
-    // this is not exactly the txn start due to creating TxnData, but it is really close 
+    // this is not exactly the txn start due to creating TxnData, but it is really close
     record_time(protocol_plugin_log, txn_data, TXN_START, NULL);
 
     /* if we need to go through codding */
@@ -120,8 +119,10 @@ transaction_handler(TSCont contp, TSEvent event, void *edata)
     // TSHttpSsnHookAdd(ssnp, TS_HTTP_TXN_CLOSE_HOOK, contp);
 
     // TSCont txn_contp = TSContCreate(transaction_handler, TSMutexCreate());
-    TSVConn vconn    = TSTransformCreate(RS_resp_transform_handler, txnp);
+    TSVConn vconn = TSTransformCreate(RS_resp_transform_handler, txnp);
     TSContDataSet(vconn, txn_data);
+    txn_data->transform_contp = (TSCont)vconn;
+    txn_data->txnp_mtx        = TSContMutexGet((TSCont)txnp);
 
     // TSHttpTxnHookAdd(txnp, TS_HTTP_POST_REMAP_HOOK, txn_contp);
     TSHttpTxnHookAdd(txnp, TS_HTTP_RESPONSE_TRANSFORM_HOOK, vconn);
@@ -204,21 +205,22 @@ transaction_handler(TSCont contp, TSEvent event, void *edata)
     if (txn_data) {
       // drop everything since txn is going to close
       clean_txn(contp, txnp);
-      if (contp != global_txn_contp){
-        TSDebug(PLUGIN_NAME, "clean_txn: txn %ld, destroy contp", TSHttpTxnIdGet(txnp)); 
-        TSContDestroy(contp); 
-      }
-        TSHttpTxnArgSet(txnp, txn_data_ind, NULL);
-      TSDebug(PLUGIN_NAME, "clean_txn: txn %ld, finish cleaning", TSHttpTxnIdGet(txnp));
-    
-    TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
-                         "**********************************************************************************");
-    TSDebug(PLUGIN_NAME,
-            "*********************************************************************************************************"
-            "**********************************************************************************\n\n\n\n\n\n");
-    record_time(protocol_plugin_log, txn_data, TXN_FINISH, NULL);
+      TSHttpTxnArgSet(txnp, txn_data_ind, NULL);
+      TSDebug(PLUGIN_NAME, "TS_EVENT_HTTP_TXN_CLOSE: txn %ld, finish cleaning", TSHttpTxnIdGet(txnp));
+
+      TSDebug(PLUGIN_NAME,
+              "*********************************************************************************************************"
+              "**********************************************************************************");
+      TSDebug(PLUGIN_NAME,
+              "*********************************************************************************************************"
+              "**********************************************************************************\n\n\n\n\n\n");
+      record_time(protocol_plugin_log, txn_data, TXN_FINISH, NULL);
+      // if (contp != global_txn_contp) {
+      //   TSDebug(PLUGIN_NAME, "TS_EVENT_HTTP_TXN_CLOSE: txn %ld, destroy contp", TSHttpTxnIdGet(txnp));
+      //   TSContDestroy(contp);
+      // }
     }
-    /* this contp is created globally, so don't destroy */ 
+    /* this contp is created globally, so don't destroy */
     // TSContDestroy(contp);
     break;
 
@@ -265,15 +267,19 @@ session_handler(TSCont contp, TSEvent event, void *edata)
 {
   TSHttpSsn ssnp = (TSHttpSsn)edata;
 
-  TSDebug(PLUGIN_NAME, "session_handler:  ssn %" PRId64 " receive %s (%d)", TSHttpSsnIdGet(ssnp), TSHttpEventNameLookup(event), event);
+  TSDebug(PLUGIN_NAME, "session_handler:  ssn %" PRId64 " receive %s (%d)", TSHttpSsnIdGet(ssnp), TSHttpEventNameLookup(event),
+          event);
   switch (event) {
   case TS_EVENT_HTTP_SSN_START:
 
     setup_ssn(ssnp, n_peers);
     SsnData *ssn_data = TSHttpSsnArgGet(ssnp, ssn_data_ind);
 
-    // TSCont txn_contp      = TSContCreate(transaction_handler, TSMutexCreate());
-    // TSHttpSsnHookAdd(ssnp, TS_HTTP_POST_REMAP_HOOK, txn_contp);
+    // this should have the lifetime of complete ssn
+    TSCont txn_contp = TSContCreate(transaction_handler, TSMutexCreate());
+    TSHttpSsnHookAdd(ssnp, TS_HTTP_TXN_START_HOOK, txn_contp);
+    TSHttpSsnHookAdd(ssnp, TS_HTTP_POST_REMAP_HOOK, txn_contp);
+    TSHttpSsnHookAdd(ssnp, TS_HTTP_TXN_CLOSE_HOOK, txn_contp);
 
     TSDebug(PLUGIN_NAME, "session_handler:  ssn %ld peer_connect is on the fly currently %d peers connected", TSHttpSsnIdGet(ssnp),
             ssn_data->n_connected_peers);
@@ -281,6 +287,7 @@ session_handler(TSCont contp, TSEvent event, void *edata)
 
   case TS_EVENT_HTTP_SSN_CLOSE:
     clean_ssn(ssnp, n_peers);
+
     TSDebug(PLUGIN_NAME, "session_handler:  ssn %ld session closed", TSHttpSsnIdGet(ssnp));
     TSDebug(PLUGIN_NAME, "*********************************************************************************************************"
                          "**********************************************************************************");
@@ -350,9 +357,8 @@ TSPluginInit(int argc, const char *argv[])
     TSError("[%s] Failed to create log", PLUGIN_NAME);
   }
 
-
   CHECK(TSTextLogObjectWrite(protocol_plugin_log, "# myip "));
-  for (int i=0; i<n_myips; i++){
+  for (int i = 0; i < n_myips; i++) {
     CHECK(TSTextLogObjectWrite(protocol_plugin_log, "# %s ", convert_ip_to_str(myips[i])));
   }
   CHECK(TSTextLogObjectWrite(protocol_plugin_log, "# peers "));
@@ -362,11 +368,11 @@ TSPluginInit(int argc, const char *argv[])
 
   // Jason::Debug::Temp
   EC_k = n_peers;
-  EC_n = n_peers+1;
+  EC_n = n_peers + 1;
   EC_x = 1;
 
   global_ssn_contp = TSContCreate(session_handler, TSMutexCreate());
-  global_txn_contp     = TSContCreate(transaction_handler, TSMutexCreate());
+  global_txn_contp = TSContCreate(transaction_handler, TSMutexCreate());
 
   CHECK(TSHttpSsnArgIndexReserve(PLUGIN_NAME, "session data", &ssn_data_ind));
   CHECK(TSHttpTxnArgIndexReserve(PLUGIN_NAME, "transaction data", &txn_data_ind));
@@ -374,9 +380,9 @@ TSPluginInit(int argc, const char *argv[])
   TSHttpHookAdd(TS_HTTP_SSN_START_HOOK, global_ssn_contp);
   TSHttpHookAdd(TS_HTTP_SSN_CLOSE_HOOK, global_ssn_contp);
 
-  TSHttpHookAdd(TS_HTTP_TXN_START_HOOK, global_txn_contp);
-  TSHttpHookAdd(TS_HTTP_POST_REMAP_HOOK, global_txn_contp);
-  TSHttpHookAdd(TS_HTTP_TXN_CLOSE_HOOK, global_txn_contp);
+  // TSHttpHookAdd(TS_HTTP_TXN_START_HOOK, global_txn_contp);
+  // TSHttpHookAdd(TS_HTTP_POST_REMAP_HOOK, global_txn_contp);
+  // TSHttpHookAdd(TS_HTTP_TXN_CLOSE_HOOK, global_txn_contp);
 
   TSDebug(PLUGIN_NAME, "initialization finish");
   return;

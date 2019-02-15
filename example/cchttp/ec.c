@@ -28,60 +28,65 @@ RS_resp_transform_handler(TSCont contp, TSEvent event, void *edata)
   // Jason::DEBUG::WEIRD what is edata here? it is not txnp
   TxnData *txn_data = TSContDataGet(contp);
 
+  if (TSMutexLockTry(txn_data->txnp_mtx) != TS_SUCCESS){
+    // Jason::DEBUG:: I don't this is not necessary 
+    // TSContSchedule(contp, 1, TS_THREAD_POOL_DEFAULT);
+    return TS_SUCCESS;
+  }
   if (TSVConnClosedGet(contp)) {
-    TSDebug(PLUGIN_NAME, "RS_resp_transform: VConn is closed");
+    TSDebug(PLUGIN_NAME, "RS_resp_transform: txn %s VConn is closed event %s (%d)", txn_data->ssn_txn_id, TSHttpEventNameLookup(event), event);
     TSContDestroy(contp);
+    TSMutexUnlock(txn_data->txnp_mtx);
     return 0;
-  } else {
-    // int64_t txn_id = -1;
-    // if (txn_data != NULL && txn_data->txnp != NULL)
-    //   txn_id = TSHttpTxnIdGet(txn_data->txnp);
+  }
+  else 
+    // unknow event is from EC_K_BACK 
+    TSDebug(PLUGIN_NAME, "RS_resp_transform: txn %s event %s (%d)", txn_data->ssn_txn_id, TSHttpEventNameLookup(event), event);
 
-    TSDebug(PLUGIN_NAME, "Entering RS_resp_transform: txn %s event %s", txn_data->ssn_txn_id, TSHttpEventNameLookup(event));
+  switch (event) {
+  case TS_EVENT_ERROR: {
+    TSVIO input_vio;
 
-    switch (event) {
-    case TS_EVENT_ERROR: {
-      TSVIO input_vio;
-
-      //   TSDebug(PLUGIN_NAME, "\tEvent is TS_EVENT_ERROR");
-      /* Get the write VIO for the write operation that was
-       * performed on ourself. This VIO contains the continuation of
-       * our parent transformation. This is the input VIO.
-       */
-      input_vio = TSVConnWriteVIOGet(contp);
-
-      /* Call back the write VIO continuation to let it know that we
-       * have completed the write operation.
-       */
-      TSContCall(TSVIOContGet(input_vio), TS_EVENT_ERROR, input_vio);
-    } break;
-    case TS_EVENT_VCONN_WRITE_COMPLETE:
-      //   TSDebug(PLUGIN_NAME, "\tEvent is TS_EVENT_VCONN_WRITE_COMPLETE");
-      /* When our output connection says that it has finished
-       * reading all the data we've written to it then we should
-       * shutdown the write portion of its connection to
-       * indicate that we don't want to hear about it anymore.
-       */
-      //   TSVConnShutdown(TSTransformOutputVConnGet(contp), 0, 1);
-      TSVConnClose(TSTransformOutputVConnGet(contp));
-      break;
-
-    /* If we get a WRITE_READY event or any other type of
-     * event (sent, perhaps, because we were re-enabled) then
-     * we'll attempt to transform more data.
+    //   TSDebug(PLUGIN_NAME, "\tEvent is TS_EVENT_ERROR");
+    /* Get the write VIO for the write operation that was
+     * performed on ourself. This VIO contains the continuation of
+     * our parent transformation. This is the input VIO.
      */
-    case TS_EVENT_VCONN_WRITE_READY:
-    case TS_EVENT_IMMEDIATE: // the first time it arrives
-    case 2:                  // EVENT_INTERVAL when called by TS_Cont_Schedule
-      handle_transform(contp, txn_data);
-      break;
-    default:
-      TSDebug(PLUGIN_NAME, "\t(event is %d)", event);
-      handle_transform(contp, txn_data);
-      break;
-    }
+    input_vio = TSVConnWriteVIOGet(contp);
+
+    /* Call back the write VIO continuation to let it know that we
+     * have completed the write operation.
+     */
+    TSContCall(TSVIOContGet(input_vio), TS_EVENT_ERROR, input_vio);
+  } break;
+  case TS_EVENT_VCONN_WRITE_COMPLETE:
+    /* When our output connection says that it has finished
+     * reading all the data we've written to it then we should
+     * shutdown the write portion of its connection to
+     * indicate that we don't want to hear about it anymore.
+     */
+    // Jason::Debug:: this might be the problem causing closed conn in the header
+      TSVConnShutdown(TSTransformOutputVConnGet(contp), 0, 1);
+    // TSVConnClose(TSTransformOutputVConnGet(contp));
+    break;
+
+  /* If we get a WRITE_READY event or any other type of
+   * event (sent, perhaps, because we were re-enabled) then
+   * we'll attempt to transform more data.
+   */
+  case TS_EVENT_VCONN_WRITE_READY:
+  case TS_EVENT_VCONN_START: // this is sent by EC_K_BACK
+  case TS_EVENT_IMMEDIATE: // the first time it arrives
+  case 2:                  // EVENT_INTERVAL when called by TS_Cont_Schedule
+    handle_transform(contp, txn_data);
+    break;
+  default:
+    TSDebug(PLUGIN_NAME, "\t(event is %d)", event);
+    handle_transform(contp, txn_data);
+    break;
   }
 
+  TSMutexUnlock(txn_data->txnp_mtx);
   return 0;
 }
 
@@ -116,12 +121,11 @@ handle_transform0(TSCont contp, TxnData *txn_data)
    * and initialize its internals.
    */
 
-
   buf_test = TSVIOBufferGet(input_vio);
 
   if (!buf_test) {
     TSDebug(PLUGIN_NAME, "handle_transform: txn %s buf_test", txn_data->ssn_txn_id);
-    TSVIONBytesSet(txn_data->output_vio, txn_data->osize);
+    // TSVIONBytesSet(txn_data->output_vio, txn_data->osize); 
     TSVIOReenable(txn_data->output_vio);
     return;
   }
@@ -129,20 +133,23 @@ handle_transform0(TSCont contp, TxnData *txn_data)
   if (txn_data->local_finish_ts == 0)
     record_time(protocol_plugin_log, txn_data, LOCAL_FINISH, NULL);
 
+  // if (TSMutexLockTry(txn_data->transform_mtx) != TS_SUCCESS)
+  //   return;
   TSMutexLock(txn_data->transform_mtx);
+
+
   if (txn_data->status != EC_STATUS_PEER_RESP_READY) {
-    TSDebug(PLUGIN_NAME, "handle_transform: txn %s wait for peer response", txn_data->ssn_txn_id);
-    txn_data->transform_contp = contp;
+    txn_data->status = EC_STATUS_LOCAL_FINISH;
+    TSDebug(PLUGIN_NAME, "handle_transform: txn %s wait %d ms for peer response", txn_data->ssn_txn_id, txn_data->reschedule_wait+1);
     TSMutexUnlock(txn_data->transform_mtx);
-    // TSContSchedule(contp, 1, TS_THREAD_POOL_DEFAULT);
+
+    // txn_data->reschedule_wait ++;
+    // if (unlikely(txn_data->reschedule_wait > 125))
+    //   txn_data->reschedule_wait = 125; 
+    // TSContSchedule(contp, txn_data->reschedule_wait, TS_THREAD_POOL_DEFAULT);
     return;
   }
   TSMutexUnlock(txn_data->transform_mtx);
-
-
-
-
-
 
   if (txn_data->my_temp_reader == NULL) {
     TSDebug(PLUGIN_NAME, "handle_transform: txn %s create response temp buffer, peer final response %s", txn_data->ssn_txn_id,
@@ -161,7 +168,6 @@ handle_transform0(TSCont contp, TxnData *txn_data)
   }
 
   record_time(protocol_plugin_log, txn_data, RESPONSE_BEGIN, NULL);
-
 
   towrite = TSVIONTodoGet(input_vio);
   // need to check here, if towrite is 0, there is no reader to get from input_vio

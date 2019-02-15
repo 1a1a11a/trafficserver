@@ -130,6 +130,7 @@ setup_txn(TSHttpTxn txnp)
     // ssn_data->pcds[i].response_buffer_reader = TSIOBufferReaderAlloc(ssn_data->pcds[i].response_buffer);
     // CHECKNULL(ssn_data->pcds[i].response_buffer_reader);
   }
+  TSDebug(PLUGIN_NAME, "setup_txn: txn %s txn setup finished", txn_data->ssn_txn_id);
   return TS_SUCCESS;
 }
 
@@ -185,7 +186,7 @@ conn_peer(TSCont contp, TSHttpTxn txnp)
   TSHandleMLocRelease(bufp, hdr_loc, url_loc);
   TSHandleMLocRelease(bufp, TS_NULL_MLOC, hdr_loc);
   // TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
-  TSDebug(PLUGIN_NAME, "setup_txn: txn %" PRId64 " request setup finished", TSHttpTxnIdGet(txnp));
+  TSDebug(PLUGIN_NAME, "conn_peer: txn %s request setup finished", txn_data->ssn_txn_id);
   return TS_SUCCESS;
 }
 
@@ -344,10 +345,9 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
           // now find the size of current packet
           char *cp = strstr(response_str, "Content-Length");
           if (cp) {
-            // flask response header is separated by \r without \n???
             char *end_of_content_length = strstr(cp, "\r\n");
-            TSDebug(PLUGIN_NAME, "cp %p end %p, len %ld n_read %ld %ld/%ld", cp, end_of_content_length, end_of_content_length - cp,
-                    n_read, cp - response_str + 15, end_of_content_length - response_str);
+            // TSDebug(PLUGIN_NAME, "cp %p end %p, len %ld n_read %ld %ld/%ld", cp, end_of_content_length, end_of_content_length - cp,
+            //         n_read, cp - response_str + 15, end_of_content_length - response_str);
             if (cp - response_str + 15 < n_read && end_of_content_length && end_of_content_length - response_str < n_read) {
               pcd->content_length = strtol(cp + 15, NULL, 10);
             } else
@@ -387,7 +387,6 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
           // new
           if (!pcd->content_has_began) {
             if ((find_loc != NULL) && (find_loc + 4 - response_str <= n_read)) {
-              TSDebug(PLUGIN_NAME, "set content_has_began, %ld %ld", find_loc - response_str,n_read); 
               pcd->content_has_began = true;
               n_read -= strstr(response_str, "\r\n\r\n") + 4 - response_str;
               response_str = strstr(response_str, "\r\n\r\n") + 4;
@@ -401,10 +400,9 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
               if (strstr(pcd->concat_response, "\r\n\r\n")) {
                 // content has begin in this read, find begin pos
                 pcd->content_has_began = true;
-                int new_pos = 0; 
+                int new_pos            = 0;
                 while ((response_str[new_pos] == '\r' || response_str[new_pos] == '\n') && new_pos < 6)
-                  new_pos++; 
-                TSDebug(PLUGIN_NAME, "Update new_pos %d", new_pos); 
+                  new_pos++;
                 n_read -= new_pos;
                 response_str += new_pos;
               } else
@@ -427,7 +425,8 @@ peer_conn_handler(TSCont contp, TSEvent event, void *edata)
             } else if (n_read == 0)
               ;
             else {
-              TSDebug(PLUGIN_NAME, "peer_conn_handler: txn %s peer %d content has began %d ERROR n_read less than 0, n_read %" PRId64,
+              TSDebug(PLUGIN_NAME,
+                      "peer_conn_handler: txn %s peer %d content has began %d ERROR n_read less than 0, n_read %" PRId64,
                       txn_data->ssn_txn_id, peer->index, pcd->content_has_began, n_read);
               response_str = TSIOBufferBlockReadStart(block, pcd->response_buffer_reader, &n_read);
               char *temp   = TSstrndup(response_str, n_read);
@@ -508,8 +507,13 @@ EC_K_back(TSHttpTxn txnp)
 
   // Jason::Optimize::using atomic op might be more efficient
   TSMutexLock(txn_data->transform_mtx);
-  txn_data->status = EC_STATUS_PEER_RESP_READY;
-  if (txn_data->transform_contp)
-    TSContCall(txn_data->transform_contp, TS_EVENT_VCONN_WRITE_READY, NULL);
-  TSMutexUnlock(txn_data->transform_mtx);
+
+  if (txn_data->status == EC_STATUS_LOCAL_FINISH) {
+    txn_data->status = EC_STATUS_PEER_RESP_READY;
+    TSMutexUnlock(txn_data->transform_mtx);
+    TSContCall(txn_data->transform_contp, TS_EVENT_VCONN_START, NULL);
+  } else {
+    txn_data->status = EC_STATUS_PEER_RESP_READY;
+    TSMutexUnlock(txn_data->transform_mtx);
+  }
 }
