@@ -493,6 +493,7 @@ EC_K_back(TSHttpTxn txnp)
       TSDebug(PLUGIN_NAME, "EC_K_back: txn %s peer %d response %s", txn_data->ssn_txn_id, i, txn_data->peer_resp_buf[i]);
     }
   }
+  final_size ++; 
   TSAssert(available_peers >= EC_k - 1);
   TSDebug(PLUGIN_NAME, "EC_K_back: txn %s K %d X %d, response size sum is %" PRId64, txn_data->ssn_txn_id, EC_k, EC_x, final_size);
 
