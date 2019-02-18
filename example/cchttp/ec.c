@@ -28,11 +28,15 @@ RS_resp_transform_handler(TSCont contp, TSEvent event, void *edata)
   // Jason::DEBUG::WEIRD what is edata here? it is not txnp
   TxnData *txn_data = TSContDataGet(contp);
 
-  if (TSMutexLockTry(txn_data->txnp_mtx) != TS_SUCCESS){
-    // Jason::DEBUG:: I don't this is not necessary 
-    // TSContSchedule(contp, 1, TS_THREAD_POOL_DEFAULT);
-    return TS_SUCCESS;
-  }
+  // if (TSMutexLockTry(txn_data->txnp_mtx) != TS_SUCCESS){
+  //   // Jason::DEBUG:: I don't this is not necessary
+  //   // TSContSchedule(contp, 1, TS_THREAD_POOL_DEFAULT);
+  //   return TS_SUCCESS;
+  // }
+  
+  // if I don't have this, I will not get Connection:close in debug version, but I get them in release version 
+
+  TSMutexLock(txn_data->txnp_mtx);
   if (TSVConnClosedGet(contp)) {
     TSDebug(PLUGIN_NAME, "RS_resp_transform: txn %s VConn is closed event %s (%d)", txn_data->ssn_txn_id, TSHttpEventNameLookup(event), event);
     TSContDestroy(contp);
@@ -66,8 +70,8 @@ RS_resp_transform_handler(TSCont contp, TSEvent event, void *edata)
      * indicate that we don't want to hear about it anymore.
      */
     // Jason::Debug:: this might be the problem causing closed conn in the header
-      TSVConnShutdown(TSTransformOutputVConnGet(contp), 0, 1);
-    // TSVConnClose(TSTransformOutputVConnGet(contp));
+      // TSVConnShutdown(TSTransformOutputVConnGet(contp), 0, 1);
+    TSVConnClose(TSTransformOutputVConnGet(contp));
     break;
 
   /* If we get a WRITE_READY event or any other type of
@@ -132,9 +136,8 @@ handle_transform0(TSCont contp, TxnData *txn_data)
 
   if (txn_data->local_finish_ts == 0)
     record_time(protocol_plugin_log, txn_data, LOCAL_FINISH, NULL);
+  TSDebug(PLUGIN_NAME, "handle_transform: txn %s local finish", txn_data->ssn_txn_id);
 
-  // if (TSMutexLockTry(txn_data->transform_mtx) != TS_SUCCESS)
-  //   return;
   TSMutexLock(txn_data->transform_mtx);
 
 
@@ -143,6 +146,7 @@ handle_transform0(TSCont contp, TxnData *txn_data)
     TSDebug(PLUGIN_NAME, "handle_transform: txn %s wait %d ms for peer response", txn_data->ssn_txn_id, txn_data->reschedule_wait+1);
     TSMutexUnlock(txn_data->transform_mtx);
 
+    // use schedule will bring huge latency 
     // txn_data->reschedule_wait ++;
     // if (unlikely(txn_data->reschedule_wait > 125))
     //   txn_data->reschedule_wait = 125; 
@@ -152,7 +156,8 @@ handle_transform0(TSCont contp, TxnData *txn_data)
   TSMutexUnlock(txn_data->transform_mtx);
 
   if (txn_data->my_temp_reader == NULL) {
-    TSDebug(PLUGIN_NAME, "handle_transform: txn %s create response temp buffer, peer final response %s", txn_data->ssn_txn_id,
+    if (MY_DEBUG_LEVEL>3)
+      TSDebug(PLUGIN_NAME, "handle_transform: txn %s create response temp buffer, peer final response %s", txn_data->ssn_txn_id,
             txn_data->final_resp);
     txn_data->my_temp_buffer = TSIOBufferCreate();
     txn_data->my_temp_reader = TSIOBufferReaderAlloc(txn_data->my_temp_buffer);

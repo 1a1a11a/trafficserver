@@ -23,7 +23,7 @@
 
 #pragma once
 #define _GNU_SOURCE      /* To get defns of NI_MAXSERV and NI_MAXHOST */
-#define MY_DEBUG_LEVEL 4 // 0-5
+#define MY_DEBUG_LEVEL 3 // 0-5
 
 #include <unistd.h>
 #include <math.h>

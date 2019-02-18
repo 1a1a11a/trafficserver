@@ -490,7 +490,8 @@ EC_K_back(TSHttpTxn txnp)
     if (current_peer_available > 0) {
       available_peers++;
       final_size += strlen(txn_data->peer_resp_buf[i]);
-      TSDebug(PLUGIN_NAME, "EC_K_back: txn %s peer %d response %s", txn_data->ssn_txn_id, i, txn_data->peer_resp_buf[i]);
+      if (MY_DEBUG_LEVEL>3)
+        TSDebug(PLUGIN_NAME, "EC_K_back: txn %s peer %d response %s", txn_data->ssn_txn_id, i, txn_data->peer_resp_buf[i]);
     }
   }
   final_size ++; 
@@ -504,7 +505,8 @@ EC_K_back(TSHttpTxn txnp)
       TSstrlcat(txn_data->final_resp, txn_data->peer_resp_buf[i], final_size + 1);
     }
   }
-  TSDebug(PLUGIN_NAME, "EC_K_back: txn %s final resp %s", txn_data->ssn_txn_id, txn_data->final_resp);
+  if (MY_DEBUG_LEVEL>3)
+    TSDebug(PLUGIN_NAME, "EC_K_back: txn %s final resp %s", txn_data->ssn_txn_id, txn_data->final_resp);
 
   // Jason::Optimize::using atomic op might be more efficient
   TSMutexLock(txn_data->transform_mtx);
@@ -512,6 +514,7 @@ EC_K_back(TSHttpTxn txnp)
   if (txn_data->status == EC_STATUS_LOCAL_FINISH) {
     txn_data->status = EC_STATUS_PEER_RESP_READY;
     TSMutexUnlock(txn_data->transform_mtx);
+    TSDebug(PLUGIN_NAME, "EC_K_back: txn %s call transform", txn_data->ssn_txn_id);
     TSContCall(txn_data->transform_contp, TS_EVENT_VCONN_START, NULL);
   } else {
     txn_data->status = EC_STATUS_PEER_RESP_READY;
