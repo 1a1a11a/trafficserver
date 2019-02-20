@@ -1476,9 +1476,8 @@ mime_hdr_field_attach(MIMEHdrImpl *mh, MIMEField *field, int check_for_dups, MIM
   //////////////////////////////////////////////////
 
   if (check_for_dups || (prev_dup && (!prev_dup->is_dup_head()))) {
-    int length;
-    const char *name = mime_field_name_get(field, &length);
-    prev_dup         = mime_hdr_field_find(mh, name, length);
+    std::string_view name{field->name_get()};
+    prev_dup = mime_hdr_field_find(mh, name.data(), static_cast<int>(name.size()));
     ink_assert((prev_dup == nullptr) || (prev_dup->is_dup_head()));
   }
 
@@ -1595,9 +1594,8 @@ mime_hdr_field_detach(MIMEHdrImpl *mh, MIMEField *field, bool detach_all_dups)
     }
   } else // need to walk list to find and patch out from predecessor
   {
-    int name_length;
-    const char *name = mime_field_name_get(field, &name_length);
-    MIMEField *prev  = mime_hdr_field_find(mh, name, name_length);
+    std::string_view name{field->name_get()};
+    MIMEField *prev = mime_hdr_field_find(mh, name.data(), static_cast<int>(name.size()));
 
     while (prev && (prev->m_next_dup != field)) {
       prev = prev->m_next_dup;
@@ -1726,15 +1724,13 @@ mime_field_destroy(MIMEHdrImpl * /* mh ATS_UNUSED */, MIMEField *field)
   field->m_readiness = MIME_FIELD_SLOT_READINESS_DELETED;
 }
 
-const char *
-mime_field_name_get(const MIMEField *field, int *length)
+std::string_view
+MIMEField::name_get() const
 {
-  *length = field->m_len_name;
-  if (field->m_wks_idx >= 0) {
-    return hdrtoken_index_to_wks(field->m_wks_idx);
-  } else {
-    return field->m_ptr_name;
+  if (m_wks_idx >= 0) {
+    return {hdrtoken_index_to_wks(m_wks_idx), m_len_name};
   }
+  return {m_ptr_name, m_len_name};
 }
 
 void
@@ -1781,45 +1777,42 @@ MIMEField::value_get_index(const char *value, int length) const
   return retval;
 }
 
-const char *
-mime_field_value_get(const MIMEField *field, int *length)
+std::string_view
+MIMEField::value_get() const
 {
-  *length = field->m_len_value;
-  return field->m_ptr_value;
+  return {m_ptr_value, m_len_value};
 }
 
 int32_t
 mime_field_value_get_int(const MIMEField *field)
 {
-  int length;
-  const char *str = mime_field_value_get(field, &length);
+  std::string_view value{field->value_get()};
 
-  return mime_parse_int(str, str + length);
+  return mime_parse_int(value.data(), value.data() + value.size());
 }
 
 uint32_t
 mime_field_value_get_uint(const MIMEField *field)
 {
-  int length;
-  const char *str = mime_field_value_get(field, &length);
-  return mime_parse_uint(str, str + length);
+  std::string_view value{field->value_get()};
+
+  return mime_parse_uint(value.data(), value.data() + value.size());
 }
 
 int64_t
 mime_field_value_get_int64(const MIMEField *field)
 {
-  int length;
-  const char *str = mime_field_value_get(field, &length);
+  std::string_view value{field->value_get()};
 
-  return mime_parse_int64(str, str + length);
+  return mime_parse_int64(value.data(), value.data() + value.size());
 }
 
 time_t
 mime_field_value_get_date(const MIMEField *field)
 {
-  int length;
-  const char *str = mime_field_value_get(field, &length);
-  return mime_parse_date(str, str + length);
+  std::string_view value{field->value_get()};
+
+  return mime_parse_date(value.data(), value.data() + value.size());
 }
 
 const char *
@@ -1828,10 +1821,9 @@ mime_field_value_get_comma_val(const MIMEField *field, int *length, int idx)
   // some fields (like Date) contain commas but should not be ripped apart
   if (!field->supports_commas()) {
     if (idx == 0) {
-      return mime_field_value_get(field, length);
-    } else {
-      return nullptr;
+      return field->value_get(length);
     }
+    return nullptr;
   } else {
     Str *str;
     StrList list(false);
@@ -1864,16 +1856,13 @@ mime_field_value_get_comma_val_count(const MIMEField *field)
 int
 mime_field_value_get_comma_list(const MIMEField *field, StrList *list)
 {
-  const char *str;
-  int len;
-
-  str = mime_field_value_get(field, &len);
+  std::string_view value{field->value_get()};
 
   // if field doesn't support commas, don't rip apart.
   if (!field->supports_commas()) {
-    list->append_string(str, len);
+    list->append_string(value.data(), static_cast<int>(value.size()));
   } else {
-    HttpCompat::parse_tok_list(list, 1, str, len, ',');
+    HttpCompat::parse_tok_list(list, 1, value.data(), static_cast<int>(value.size()), ',');
   }
 
   return list->count;
@@ -3293,6 +3282,7 @@ int
 mime_parse_rfc822_date_fastcase(const char *buf, int length, struct tm *tp)
 {
   unsigned int three_char_wday, three_char_mon;
+  std::string_view view{buf, size_t(length)};
 
   ink_assert(length >= 29);
   ink_assert(!is_ws(buf[0]));
@@ -3323,7 +3313,7 @@ mime_parse_rfc822_date_fastcase(const char *buf, int length, struct tm *tp)
     }
   }
   if (tp->tm_wday < 0) {
-    tp->tm_wday = day_names_dfa->match(buf, length);
+    tp->tm_wday = day_names_dfa->match(view);
     if (tp->tm_wday < 0) {
       return 0;
     }
@@ -3376,7 +3366,7 @@ mime_parse_rfc822_date_fastcase(const char *buf, int length, struct tm *tp)
     }
   }
   if (tp->tm_mon < 0) {
-    tp->tm_mon = month_names_dfa->match(buf, length);
+    tp->tm_mon = month_names_dfa->match(view);
     if (tp->tm_mon < 0) {
       return 0;
     }
@@ -3521,7 +3511,7 @@ mime_parse_day(const char *&buf, const char *end, int *day)
     e += 1;
   }
 
-  *day = day_names_dfa->match(buf, e - buf);
+  *day = day_names_dfa->match({buf, size_t(e - buf)});
   if (*day < 0) {
     return 0;
   } else {
@@ -3544,7 +3534,7 @@ mime_parse_month(const char *&buf, const char *end, int *month)
     e += 1;
   }
 
-  *month = month_names_dfa->match(buf, e - buf);
+  *month = month_names_dfa->match({buf, size_t(e - buf)});
   if (*month < 0) {
     return 0;
   } else {

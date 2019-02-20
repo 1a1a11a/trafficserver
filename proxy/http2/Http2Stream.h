@@ -24,20 +24,21 @@
 #pragma once
 
 #include "HTTP2.h"
-#include "../ProxyClientTransaction.h"
+#include "../ProxyTransaction.h"
 #include "Http2DebugNames.h"
 #include "../http/HttpTunnel.h" // To get ChunkedHandler
 #include "Http2DependencyTree.h"
+#include "tscore/History.h"
 
 class Http2Stream;
 class Http2ConnectionState;
 
 typedef Http2DependencyTree::Tree<Http2Stream *> DependencyTree;
 
-class Http2Stream : public ProxyClientTransaction
+class Http2Stream : public ProxyTransaction
 {
 public:
-  typedef ProxyClientTransaction super; ///< Parent type.
+  typedef ProxyTransaction super; ///< Parent type.
   Http2Stream(Http2StreamId sid = 0, ssize_t initial_rwnd = Http2::initial_window_size) : client_rwnd(initial_rwnd), _id(sid)
   {
     SET_HANDLER(&Http2Stream::main_event_handler);
@@ -244,6 +245,8 @@ private:
   HTTPHdr _req_header;
   VIO read_vio;
   VIO write_vio;
+
+  History<HISTORY_DEFAULT_SIZE> _history;
 
   bool trailing_header = false;
   bool body_done       = false;

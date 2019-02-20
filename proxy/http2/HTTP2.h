@@ -83,6 +83,7 @@ enum {
   HTTP2_STAT_SESSION_DIE_INACTIVE,
   HTTP2_STAT_SESSION_DIE_EOS,
   HTTP2_STAT_SESSION_DIE_ERROR,
+  HTTP2_STAT_SESSION_DIE_HIGH_ERROR_RATE,
 
   HTTP2_N_STATS // Terminal counter, NOT A STAT INDEX.
 };
@@ -372,12 +373,12 @@ public:
   static uint32_t max_frame_size;
   static uint32_t header_table_size;
   static uint32_t max_header_list_size;
-  static uint32_t max_request_header_size;
   static uint32_t accept_no_activity_timeout;
   static uint32_t no_activity_timeout_in;
   static uint32_t active_timeout_in;
   static uint32_t push_diary_size;
   static uint32_t zombie_timeout_in;
+  static float stream_error_rate_threshold;
 
   static void init();
 };

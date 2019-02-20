@@ -241,8 +241,18 @@ public:
         }
       }
       break;
-    case HANDSHAKE_HOOKS_SNI:
+    case HANDSHAKE_HOOKS_CLIENT_HELLO:
+    case HANDSHAKE_HOOKS_CLIENT_HELLO_INVOKE:
       if (eventId == TS_EVENT_VCONN_START) {
+        retval = true;
+      } else if (eventId == TS_EVENT_SSL_CLIENT_HELLO) {
+        if (curHook) {
+          retval = true;
+        }
+      }
+      break;
+    case HANDSHAKE_HOOKS_SNI:
+      if (eventId == TS_EVENT_VCONN_START || eventId == TS_EVENT_SSL_CLIENT_HELLO) {
         retval = true;
       } else if (eventId == TS_EVENT_SSL_SERVERNAME) {
         if (curHook) {
@@ -252,7 +262,7 @@ public:
       break;
     case HANDSHAKE_HOOKS_CERT:
     case HANDSHAKE_HOOKS_CERT_INVOKE:
-      if (eventId == TS_EVENT_VCONN_START || eventId == TS_EVENT_SSL_SERVERNAME) {
+      if (eventId == TS_EVENT_VCONN_START || eventId == TS_EVENT_SSL_CLIENT_HELLO || eventId == TS_EVENT_SSL_SERVERNAME) {
         retval = true;
       } else if (eventId == TS_EVENT_SSL_CERT) {
         if (curHook) {
@@ -370,6 +380,9 @@ public:
   SSLNetVConnection(const SSLNetVConnection &) = delete;
   SSLNetVConnection &operator=(const SSLNetVConnection &) = delete;
 
+  bool protocol_mask_set = false;
+  unsigned long protocol_mask;
+
 private:
   std::string_view map_tls_protocol_to_tag(const char *proto_string) const;
   bool update_rbio(bool move_to_socket);
@@ -391,6 +404,8 @@ private:
   enum SSLHandshakeHookState {
     HANDSHAKE_HOOKS_PRE,
     HANDSHAKE_HOOKS_PRE_INVOKE,
+    HANDSHAKE_HOOKS_CLIENT_HELLO,
+    HANDSHAKE_HOOKS_CLIENT_HELLO_INVOKE,
     HANDSHAKE_HOOKS_SNI,
     HANDSHAKE_HOOKS_CERT,
     HANDSHAKE_HOOKS_CERT_INVOKE,

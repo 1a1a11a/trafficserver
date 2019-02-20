@@ -18,6 +18,7 @@ Makefile.in
 
 .project
 .cproject
+.idea
 
 .diags.log.meta
 
@@ -37,6 +38,7 @@ build/lt~obsolete.m4
 
 Makefile
 Makefile-pl
+config.cache
 config.status
 config.nice
 config.h
@@ -102,6 +104,7 @@ proxy/http2/test_Http2DependencyTree
 proxy/http2/test_HPACK
 proxy/http2/hpack-tests/results
 proxy/logging/test_LogUtils
+proxy/logging/test_LogUtils2
 
 plugins/header_rewrite/header_rewrite_test
 plugins/experimental/esi/*_test
@@ -115,6 +118,8 @@ plugins/esi/parser_test
 plugins/esi/processor_test
 plugins/esi/utils_test
 plugins/esi/vars_test
+
+plugins/experimental/uri_signing/test_uri_signing
 
 mgmt/api/traffic_api_cli_remote
 mgmt/tools/traffic_mcast_snoop

@@ -39,7 +39,7 @@
 #include "RemapPluginInfo.h"
 #include "UrlMapping.h"
 #include "records/I_RecHttp.h"
-#include "ProxyClientSession.h"
+#include "ProxySession.h"
 
 #define HTTP_RELEASE_ASSERT(X) ink_release_assert(X)
 
@@ -530,7 +530,6 @@ public:
   typedef struct _RedirectInfo {
     bool redirect_in_process = false;
     URL original_url;
-    URL redirect_url;
 
     _RedirectInfo() {}
   } RedirectInfo;
@@ -714,7 +713,6 @@ public:
     bool cdn_remap_complete                           = false;
     bool first_dns_lookup                             = true;
 
-    bool backdoor_request = false; // internal
     HttpRequestData request_data;
     ParentConfigParams *parent_params = nullptr;
     ParentResult parent_result;
@@ -883,7 +881,6 @@ public:
       cache_info.object_store.destroy();
       cache_info.transform_store.destroy();
       redirect_info.original_url.destroy();
-      redirect_info.redirect_url.destroy();
 
       url_map.clear();
       arena.reset();

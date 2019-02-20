@@ -52,6 +52,7 @@ Plugins that are considered stable are installed by default in |TS| releases.
    Cache Promotion Policies <cache_promote.en>
    Combo Handler <combo_handler.en>
    Configuration Remap <conf_remap.en>
+   Cookie Remap <cookie_remap.en>
    ESI <esi.en>
    Escalate <escalate.en>
    Compress <compress.en>
@@ -62,6 +63,7 @@ Plugins that are considered stable are installed by default in |TS| releases.
    Regex Remap <regex_remap.en>
    Regex Revalidate <regex_revalidate.en>
    Remap Purge <remap_purge.en>
+   Slice <slice.en>
    Stats over HTTP <stats_over_http.en>
    TCPInfo <tcpinfo.en>
    XDebug <xdebug.en>
@@ -199,7 +201,7 @@ directory of the |TS| source tree. Experimental plugins can be compiled by passi
 :doc:`Metalink <metalink.en>`
    Implements the Metalink download description format in order to try not to download the same file twice.
 
-:doc:`Money Trace <metalink.en>`
+:doc:`Money Trace <money_trace.en>`
    Allows Trafficserver to participate in a distributed tracing system based upon the Comcast Money library.
 
 :doc:`MP4 <mp4.en>`

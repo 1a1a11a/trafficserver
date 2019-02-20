@@ -85,6 +85,7 @@ enum SSL_Stats {
   /* error stats */
   ssl_error_want_write,
   ssl_error_want_read,
+  ssl_error_want_client_hello_cb,
   ssl_error_want_x509_lookup,
   ssl_error_syscall,
   ssl_error_read_eos,
@@ -177,6 +178,7 @@ void SSLNetVCDetach(SSL *ssl);
 SSLNetVConnection *SSLNetVCAccess(const SSL *ssl);
 
 void setClientCertLevel(SSL *ssl, uint8_t certLevel);
+void setTLSValidProtocols(SSL *ssl, unsigned long proto_mask, unsigned long max_mask);
 
 namespace ssl
 {
@@ -226,7 +228,7 @@ namespace detail
 struct ats_wildcard_matcher {
   ats_wildcard_matcher()
   {
-    if (regex.compile("^\\*\\.[^\\*.]+") != 0) {
+    if (!regex.compile("^\\*\\.[^\\*.]+")) {
       Fatal("failed to compile TLS wildcard matching regex");
     }
   }

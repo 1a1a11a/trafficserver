@@ -37,9 +37,9 @@
 #include "URL.h"
 #include "MIME.h"
 #include "HTTP.h"
-#include "ProxyClientSession.h"
+#include "ProxySession.h"
 #include "Http2ClientSession.h"
-#include "HttpServerSession.h"
+#include "Http1ServerSession.h"
 #include "HttpSM.h"
 #include "HttpConfig.h"
 #include "P_Net.h"
@@ -1295,16 +1295,12 @@ APIHook::invoke(int event, void *edata)
       ink_assert(!"not reached");
     }
   }
-  if (m_cont->mutex != nullptr) {
-    MUTEX_TRY_LOCK(lock, m_cont->mutex, this_ethread());
-    if (!lock.is_locked()) {
-      // If we cannot get the lock, the caller needs to restructure to handle rescheduling
-      ink_release_assert(0);
-    }
-    return m_cont->handleEvent(event, edata);
-  } else {
-    return m_cont->handleEvent(event, edata);
+  MUTEX_TRY_LOCK(lock, m_cont->mutex, this_ethread());
+  if (!lock.is_locked()) {
+    // If we cannot get the lock, the caller needs to restructure to handle rescheduling
+    ink_release_assert(0);
   }
+  return m_cont->handleEvent(event, edata);
 }
 
 APIHook *
@@ -2684,7 +2680,7 @@ TSMimeFieldValueGet(TSMBuffer /* bufp ATS_UNUSED */, TSMLoc field_obj, int idx, 
   if (idx >= 0) {
     return mime_field_value_get_comma_val(handle->field_ptr, value_len_ptr, idx);
   } else {
-    return mime_field_value_get(handle->field_ptr, value_len_ptr);
+    return handle->field_ptr->value_get(value_len_ptr);
   }
 }
 
@@ -3135,8 +3131,8 @@ TSMimeHdrFieldNameGet(TSMBuffer bufp, TSMLoc hdr, TSMLoc field, int *length)
   sdk_assert(sdk_sanity_check_field_handle(field, hdr) == TS_SUCCESS);
   sdk_assert(sdk_sanity_check_null_ptr((void *)length) == TS_SUCCESS);
 
-  MIMEFieldSDKHandle *handle = (MIMEFieldSDKHandle *)field;
-  return mime_field_name_get(handle->field_ptr, length);
+  MIMEFieldSDKHandle *handle = reinterpret_cast<MIMEFieldSDKHandle *>(field);
+  return handle->field_ptr->name_get(length);
 }
 
 TSReturnCode
@@ -4399,24 +4395,57 @@ TSContDataGet(TSCont contp)
 }
 
 TSAction
-TSContSchedule(TSCont contp, ink_hrtime timeout, TSThreadPool tp)
+TSContSchedule(TSCont contp, TSHRTime timeout)
 {
   sdk_assert(sdk_sanity_check_iocore_structure(contp) == TS_SUCCESS);
 
   FORCE_PLUGIN_SCOPED_MUTEX(contp);
 
-  INKContInternal *i = (INKContInternal *)contp;
-  TSAction action;
+  INKContInternal *i = reinterpret_cast<INKContInternal *>(contp);
 
-  if (ink_atomic_increment((int *)&i->m_event_count, 1) < 0) {
+  if (ink_atomic_increment(static_cast<int *>(&i->m_event_count), 1) < 0) {
     ink_assert(!"not reached");
+  }
+
+  EThread *eth = i->getThreadAffinity();
+  if (eth == nullptr) {
+    eth = this_event_thread();
+    i->setThreadAffinity(eth);
+  }
+
+  TSAction action;
+  if (timeout == 0) {
+    action = reinterpret_cast<TSAction>(eth->schedule_imm(i));
+  } else {
+    action = reinterpret_cast<TSAction>(eth->schedule_in(i, HRTIME_MSECONDS(timeout)));
+  }
+
+  /* This is a hack. Should be handled in ink_types */
+  action = (TSAction)((uintptr_t)action | 0x1);
+  return action;
+}
+
+TSAction
+TSContScheduleOnPool(TSCont contp, TSHRTime timeout, TSThreadPool tp)
+{
+  sdk_assert(sdk_sanity_check_iocore_structure(contp) == TS_SUCCESS);
+
+  FORCE_PLUGIN_SCOPED_MUTEX(contp);
+
+  INKContInternal *i = reinterpret_cast<INKContInternal *>(contp);
+
+  if (ink_atomic_increment(static_cast<int *>(&i->m_event_count), 1) < 0) {
+    ink_assert(!"not reached");
+  }
+
+  if (i->getThreadAffinity() == nullptr) {
+    i->setThreadAffinity(this_event_thread());
   }
 
   EventType etype;
 
   switch (tp) {
   case TS_THREAD_POOL_NET:
-  case TS_THREAD_POOL_DEFAULT:
     etype = ET_NET;
     break;
   case TS_THREAD_POOL_TASK:
@@ -4439,36 +4468,97 @@ TSContSchedule(TSCont contp, ink_hrtime timeout, TSThreadPool tp)
     break;
   }
 
+  TSAction action;
   if (timeout == 0) {
     action = reinterpret_cast<TSAction>(eventProcessor.schedule_imm(i, etype));
   } else {
     action = reinterpret_cast<TSAction>(eventProcessor.schedule_in(i, HRTIME_MSECONDS(timeout), etype));
   }
 
-  /* This is a hack. SHould be handled in ink_types */
+  /* This is a hack. Should be handled in ink_types */
   action = (TSAction)((uintptr_t)action | 0x1);
   return action;
 }
 
 TSAction
-TSContScheduleEvery(TSCont contp, ink_hrtime every, TSThreadPool tp)
+TSContScheduleOnThread(TSCont contp, TSHRTime timeout, TSEventThread ethread)
+{
+  ink_release_assert(ethread != nullptr);
+
+  sdk_assert(sdk_sanity_check_iocore_structure(contp) == TS_SUCCESS);
+
+  FORCE_PLUGIN_SCOPED_MUTEX(contp);
+
+  INKContInternal *i = reinterpret_cast<INKContInternal *>(contp);
+
+  if (ink_atomic_increment(static_cast<int *>(&i->m_event_count), 1) < 0) {
+    ink_assert(!"not reached");
+  }
+
+  EThread *eth = reinterpret_cast<EThread *>(ethread);
+  if (i->getThreadAffinity() == nullptr) {
+    i->setThreadAffinity(eth);
+  }
+
+  TSAction action;
+  if (timeout == 0) {
+    action = reinterpret_cast<TSAction>(eth->schedule_imm(i));
+  } else {
+    action = reinterpret_cast<TSAction>(eth->schedule_in(i, HRTIME_MSECONDS(timeout)));
+  }
+
+  /* This is a hack. Should be handled in ink_types */
+  action = (TSAction)((uintptr_t)action | 0x1);
+  return action;
+}
+
+TSAction
+TSContScheduleEvery(TSCont contp, TSHRTime every /* millisecs */)
 {
   sdk_assert(sdk_sanity_check_iocore_structure(contp) == TS_SUCCESS);
 
   FORCE_PLUGIN_SCOPED_MUTEX(contp);
 
-  INKContInternal *i = (INKContInternal *)contp;
-  TSAction action;
+  INKContInternal *i = reinterpret_cast<INKContInternal *>(contp);
 
-  if (ink_atomic_increment((int *)&i->m_event_count, 1) < 0) {
+  if (ink_atomic_increment(static_cast<int *>(&i->m_event_count), 1) < 0) {
     ink_assert(!"not reached");
+  }
+
+  EThread *eth = i->getThreadAffinity();
+  if (eth == nullptr) {
+    eth = this_event_thread();
+    i->setThreadAffinity(eth);
+  }
+
+  TSAction action = reinterpret_cast<TSAction>(eth->schedule_every(i, HRTIME_MSECONDS(every)));
+
+  /* This is a hack. Should be handled in ink_types */
+  action = (TSAction)((uintptr_t)action | 0x1);
+  return action;
+}
+
+TSAction
+TSContScheduleEveryOnPool(TSCont contp, TSHRTime every, TSThreadPool tp)
+{
+  sdk_assert(sdk_sanity_check_iocore_structure(contp) == TS_SUCCESS);
+
+  FORCE_PLUGIN_SCOPED_MUTEX(contp);
+
+  INKContInternal *i = reinterpret_cast<INKContInternal *>(contp);
+
+  if (ink_atomic_increment(static_cast<int *>(&i->m_event_count), 1) < 0) {
+    ink_assert(!"not reached");
+  }
+
+  if (i->getThreadAffinity() == nullptr) {
+    i->setThreadAffinity(this_event_thread());
   }
 
   EventType etype;
 
   switch (tp) {
   case TS_THREAD_POOL_NET:
-  case TS_THREAD_POOL_DEFAULT:
     etype = ET_NET;
     break;
   case TS_THREAD_POOL_TASK:
@@ -4479,15 +4569,84 @@ TSContScheduleEvery(TSCont contp, ink_hrtime every, TSThreadPool tp)
     break;
   }
 
-  action = reinterpret_cast<TSAction>(eventProcessor.schedule_every(i, HRTIME_MSECONDS(every), etype));
+  TSAction action = reinterpret_cast<TSAction>(eventProcessor.schedule_every(i, HRTIME_MSECONDS(every), etype));
 
-  /* This is a hack. SHould be handled in ink_types */
+  /* This is a hack. Should be handled in ink_types */
   action = (TSAction)((uintptr_t)action | 0x1);
   return action;
 }
 
 TSAction
-TSHttpSchedule(TSCont contp, TSHttpTxn txnp, ink_hrtime timeout)
+TSContScheduleEveryOnThread(TSCont contp, TSHRTime every /* millisecs */, TSEventThread ethread)
+{
+  ink_release_assert(ethread != nullptr);
+
+  sdk_assert(sdk_sanity_check_iocore_structure(contp) == TS_SUCCESS);
+
+  FORCE_PLUGIN_SCOPED_MUTEX(contp);
+
+  INKContInternal *i = reinterpret_cast<INKContInternal *>(contp);
+
+  if (ink_atomic_increment(static_cast<int *>(&i->m_event_count), 1) < 0) {
+    ink_assert(!"not reached");
+  }
+
+  EThread *eth = reinterpret_cast<EThread *>(ethread);
+  if (i->getThreadAffinity() == nullptr) {
+    i->setThreadAffinity(eth);
+  }
+
+  TSAction action = reinterpret_cast<TSAction>(eth->schedule_every(i, HRTIME_MSECONDS(every)));
+
+  /* This is a hack. Should be handled in ink_types */
+  action = (TSAction)((uintptr_t)action | 0x1);
+  return action;
+}
+
+TSReturnCode
+TSContThreadAffinitySet(TSCont contp, TSEventThread ethread)
+{
+  ink_release_assert(ethread != nullptr);
+
+  sdk_assert(sdk_sanity_check_iocore_structure(contp) == TS_SUCCESS);
+
+  FORCE_PLUGIN_SCOPED_MUTEX(contp);
+
+  INKContInternal *i       = reinterpret_cast<INKContInternal *>(contp);
+  EThread *thread_affinity = reinterpret_cast<EThread *>(ethread);
+
+  if (i->setThreadAffinity(thread_affinity)) {
+    return TS_SUCCESS;
+  }
+  return TS_ERROR;
+}
+
+TSEventThread
+TSContThreadAffinityGet(TSCont contp)
+{
+  sdk_assert(sdk_sanity_check_iocore_structure(contp) == TS_SUCCESS);
+
+  FORCE_PLUGIN_SCOPED_MUTEX(contp);
+
+  INKContInternal *i = reinterpret_cast<INKContInternal *>(contp);
+
+  return reinterpret_cast<TSEventThread>(i->getThreadAffinity());
+}
+
+void
+TSContThreadAffinityClear(TSCont contp)
+{
+  sdk_assert(sdk_sanity_check_iocore_structure(contp) == TS_SUCCESS);
+
+  FORCE_PLUGIN_SCOPED_MUTEX(contp);
+
+  INKContInternal *i = reinterpret_cast<INKContInternal *>(contp);
+
+  i->clearThreadAffinity();
+}
+
+TSAction
+TSHttpSchedule(TSCont contp, TSHttpTxn txnp, TSHRTime timeout)
 {
   sdk_assert(sdk_sanity_check_iocore_structure(contp) == TS_SUCCESS);
 
@@ -4519,16 +4678,12 @@ int
 TSContCall(TSCont contp, TSEvent event, void *edata)
 {
   Continuation *c = (Continuation *)contp;
-  if (c->mutex != nullptr) {
-    MUTEX_TRY_LOCK(lock, c->mutex, this_ethread());
-    if (!lock.is_locked()) {
-      // If we cannot get the lock, the caller needs to restructure to handle rescheduling
-      ink_release_assert(0);
-    }
-    return c->handleEvent((int)event, edata);
-  } else {
-    return c->handleEvent((int)event, edata);
+  MUTEX_TRY_LOCK(lock, c->mutex, this_ethread());
+  if (!lock.is_locked()) {
+    // If we cannot get the lock, the caller needs to restructure to handle rescheduling
+    ink_release_assert(0);
   }
+  return c->handleEvent((int)event, edata);
 }
 
 TSMutex
@@ -4576,7 +4731,7 @@ TSHttpSsnHookAdd(TSHttpSsn ssnp, TSHttpHookID id, TSCont contp)
   sdk_assert(sdk_sanity_check_continuation(contp) == TS_SUCCESS);
   sdk_assert(sdk_sanity_check_hook_id(id) == TS_SUCCESS);
 
-  ProxyClientSession *cs = reinterpret_cast<ProxyClientSession *>(ssnp);
+  ProxySession *cs = reinterpret_cast<ProxySession *>(ssnp);
   cs->ssn_hook_append(id, (INKContInternal *)contp);
 }
 
@@ -4585,28 +4740,28 @@ TSHttpSsnTransactionCount(TSHttpSsn ssnp)
 {
   sdk_assert(sdk_sanity_check_http_ssn(ssnp) == TS_SUCCESS);
 
-  ProxyClientSession *cs = reinterpret_cast<ProxyClientSession *>(ssnp);
+  ProxySession *cs = reinterpret_cast<ProxySession *>(ssnp);
   return cs->get_transact_count();
 }
 
 TSVConn
 TSHttpSsnClientVConnGet(TSHttpSsn ssnp)
 {
-  ProxyClientSession *cs = reinterpret_cast<ProxyClientSession *>(ssnp);
+  ProxySession *cs = reinterpret_cast<ProxySession *>(ssnp);
   return reinterpret_cast<TSVConn>(cs->get_netvc());
 }
 
 TSVConn
 TSHttpSsnServerVConnGet(TSHttpSsn ssnp)
 {
-  HttpServerSession *ss = reinterpret_cast<HttpServerSession *>(ssnp);
+  Http1ServerSession *ss = reinterpret_cast<Http1ServerSession *>(ssnp);
   return reinterpret_cast<TSVConn>(ss->get_netvc());
 }
 
 class TSHttpSsnCallback : public Continuation
 {
 public:
-  TSHttpSsnCallback(ProxyClientSession *cs, TSEvent event) : Continuation(cs->mutex), m_cs(cs), m_event(event)
+  TSHttpSsnCallback(ProxySession *cs, TSEvent event) : Continuation(cs->mutex), m_cs(cs), m_event(event)
   {
     SET_HANDLER(&TSHttpSsnCallback::event_handler);
   }
@@ -4620,7 +4775,7 @@ public:
   }
 
 private:
-  ProxyClientSession *m_cs;
+  ProxySession *m_cs;
   TSEvent m_event;
 };
 
@@ -4629,8 +4784,8 @@ TSHttpSsnReenable(TSHttpSsn ssnp, TSEvent event)
 {
   sdk_assert(sdk_sanity_check_http_ssn(ssnp) == TS_SUCCESS);
 
-  ProxyClientSession *cs = reinterpret_cast<ProxyClientSession *>(ssnp);
-  EThread *eth           = this_ethread();
+  ProxySession *cs = reinterpret_cast<ProxySession *>(ssnp);
+  EThread *eth     = this_ethread();
 
   // If this function is being executed on a thread created by the API
   // which is DEDICATED, the continuation needs to be called back on a
@@ -5330,7 +5485,7 @@ TSHttpTxnTransformRespGet(TSHttpTxn txnp, TSMBuffer *bufp, TSMLoc *obj)
 sockaddr const *
 TSHttpSsnClientAddrGet(TSHttpSsn ssnp)
 {
-  ProxyClientSession *cs = reinterpret_cast<ProxyClientSession *>(ssnp);
+  ProxySession *cs = reinterpret_cast<ProxySession *>(ssnp);
 
   if (cs == nullptr) {
     return nullptr;
@@ -5349,7 +5504,7 @@ TSHttpTxnClientAddrGet(TSHttpTxn txnp)
 sockaddr const *
 TSHttpSsnIncomingAddrGet(TSHttpSsn ssnp)
 {
-  ProxyClientSession *cs = reinterpret_cast<ProxyClientSession *>(ssnp);
+  ProxySession *cs = reinterpret_cast<ProxySession *>(ssnp);
 
   if (cs == nullptr) {
     return nullptr;
@@ -5372,7 +5527,7 @@ TSHttpTxnOutgoingAddrGet(TSHttpTxn txnp)
 
   HttpSM *sm = reinterpret_cast<HttpSM *>(txnp);
 
-  HttpServerSession *ssn = sm->get_server_session();
+  Http1ServerSession *ssn = sm->get_server_session();
   if (ssn == nullptr) {
     return nullptr;
   }
@@ -5490,7 +5645,7 @@ TSHttpTxnServerPacketMarkSet(TSHttpTxn txnp, int mark)
 
   // change the mark on an active server session
   if (nullptr != sm->ua_txn) {
-    HttpServerSession *ssn = sm->ua_txn->get_server_session();
+    Http1ServerSession *ssn = sm->ua_txn->get_server_session();
     if (nullptr != ssn) {
       NetVConnection *vc = ssn->get_netvc();
       if (vc != nullptr) {
@@ -5532,7 +5687,7 @@ TSHttpTxnServerPacketTosSet(TSHttpTxn txnp, int tos)
 
   // change the tos on an active server session
   if (nullptr != sm->ua_txn) {
-    HttpServerSession *ssn = sm->ua_txn->get_server_session();
+    Http1ServerSession *ssn = sm->ua_txn->get_server_session();
     if (nullptr != ssn) {
       NetVConnection *vc = ssn->get_netvc();
       if (vc != nullptr) {
@@ -5574,7 +5729,7 @@ TSHttpTxnServerPacketDscpSet(TSHttpTxn txnp, int dscp)
 
   // change the tos on an active server session
   if (nullptr != sm->ua_txn) {
-    HttpServerSession *ssn = sm->ua_txn->get_server_session();
+    Http1ServerSession *ssn = sm->ua_txn->get_server_session();
     if (nullptr != ssn) {
       NetVConnection *vc = ssn->get_netvc();
       if (vc != nullptr) {
@@ -5773,13 +5928,14 @@ TSHttpTxnReenable(TSHttpTxn txnp, TSEvent event)
   // If this function is being executed on a thread created by the API
   // which is DEDICATED, the continuation needs to be called back on a
   // REGULAR thread.
-  if (eth == nullptr || eth->tt != REGULAR) {
+  if (eth == nullptr || eth->tt != REGULAR || !eth->is_event_type(ET_NET)) {
     eventProcessor.schedule_imm(new TSHttpSMCallback(sm, event), ET_NET);
   } else {
     MUTEX_TRY_LOCK(trylock, sm->mutex, eth);
     if (!trylock.is_locked()) {
       eventProcessor.schedule_imm(new TSHttpSMCallback(sm, event), ET_NET);
     } else {
+      ink_assert(eth->is_event_type(ET_NET));
       sm->state_api_callback((int)event, nullptr);
     }
   }
@@ -5927,7 +6083,7 @@ TSHttpSsnArgSet(TSHttpSsn ssnp, int arg_idx, void *arg)
   sdk_assert(sdk_sanity_check_http_ssn(ssnp) == TS_SUCCESS);
   sdk_assert(arg_idx >= 0 && arg_idx < TS_HTTP_MAX_USER_ARG);
 
-  ProxyClientSession *cs = reinterpret_cast<ProxyClientSession *>(ssnp);
+  ProxySession *cs = reinterpret_cast<ProxySession *>(ssnp);
 
   cs->set_user_arg(arg_idx, arg);
 }
@@ -5938,7 +6094,7 @@ TSHttpSsnArgGet(TSHttpSsn ssnp, int arg_idx)
   sdk_assert(sdk_sanity_check_http_ssn(ssnp) == TS_SUCCESS);
   sdk_assert(arg_idx >= 0 && arg_idx < TS_HTTP_MAX_USER_ARG);
 
-  ProxyClientSession *cs = reinterpret_cast<ProxyClientSession *>(ssnp);
+  ProxySession *cs = reinterpret_cast<ProxySession *>(ssnp);
   return cs->get_user_arg(arg_idx);
 }
 
@@ -6073,14 +6229,14 @@ void
 TSHttpSsnDebugSet(TSHttpSsn ssnp, int on)
 {
   sdk_assert(sdk_sanity_check_http_ssn(ssnp) == TS_SUCCESS);
-  (reinterpret_cast<ProxyClientSession *>(ssnp))->set_debug(0 != on);
+  (reinterpret_cast<ProxySession *>(ssnp))->set_debug(0 != on);
 }
 
 int
 TSHttpSsnDebugGet(TSHttpSsn ssnp)
 {
   sdk_assert(sdk_sanity_check_http_ssn(ssnp) == TS_SUCCESS);
-  return (reinterpret_cast<ProxyClientSession *>(ssnp))->debug();
+  return (reinterpret_cast<ProxySession *>(ssnp))->debug();
 }
 
 int
@@ -6412,7 +6568,7 @@ TSActionCancel(TSAction actionp)
   Action *a;
   INKContInternal *i;
 
-  /* This is a hack. SHould be handled in ink_types */
+  /* This is a hack. Should be handled in ink_types */
   if ((uintptr_t)actionp & 0x1) {
     a = (Action *)((uintptr_t)actionp - 1);
     i = (INKContInternal *)a->continuation;
@@ -7241,8 +7397,8 @@ TSHttpSsnClientFdGet(TSHttpSsn ssnp, int *fdp)
 {
   sdk_assert(sdk_sanity_check_null_ptr((void *)fdp) == TS_SUCCESS);
 
-  VConnection *basecs    = reinterpret_cast<VConnection *>(ssnp);
-  ProxyClientSession *cs = dynamic_cast<ProxyClientSession *>(basecs);
+  VConnection *basecs = reinterpret_cast<VConnection *>(ssnp);
+  ProxySession *cs    = dynamic_cast<ProxySession *>(basecs);
 
   if (cs == nullptr) {
     return TS_ERROR;
@@ -7275,7 +7431,7 @@ TSHttpTxnServerFdGet(TSHttpTxn txnp, int *fdp)
   HttpSM *sm = reinterpret_cast<HttpSM *>(txnp);
   *fdp       = -1;
 
-  HttpServerSession *ss = sm->get_server_session();
+  Http1ServerSession *ss = sm->get_server_session();
   if (ss == nullptr) {
     return TS_ERROR;
   }
@@ -7643,7 +7799,7 @@ TSFetchRespHdrMLocGet(TSFetchSM fetch_sm)
 int
 TSHttpSsnIsInternal(TSHttpSsn ssnp)
 {
-  ProxyClientSession *cs = reinterpret_cast<ProxyClientSession *>(ssnp);
+  ProxySession *cs = reinterpret_cast<ProxySession *>(ssnp);
 
   if (!cs) {
     return 0;
@@ -7808,32 +7964,14 @@ template <typename T>
 inline void *
 _memberp_to_generic(T *ptr, MgmtConverter const *&conv)
 {
-  static const MgmtConverter IntConverter{
-    [](void *data) -> MgmtInt { return *static_cast<MgmtInt *>(data); },
-    [](void *data, MgmtInt i) -> void { *static_cast<MgmtInt *>(data) = i; },
-    nullptr,
-    nullptr, // float
-    nullptr,
-    nullptr // string
-  };
+  static const MgmtConverter IntConverter([](void *data) -> MgmtInt { return *static_cast<MgmtInt *>(data); },
+                                          [](void *data, MgmtInt i) -> void { *static_cast<MgmtInt *>(data) = i; });
 
-  static const MgmtConverter ByteConverter{
-    [](void *data) -> MgmtInt { return *static_cast<MgmtByte *>(data); },
-    [](void *data, MgmtInt i) -> void { *static_cast<MgmtByte *>(data) = i; },
-    nullptr,
-    nullptr, // float
-    nullptr,
-    nullptr // string
-  };
+  static const MgmtConverter ByteConverter{[](void *data) -> MgmtInt { return *static_cast<MgmtByte *>(data); },
+                                           [](void *data, MgmtInt i) -> void { *static_cast<MgmtByte *>(data) = i; }};
 
-  static const MgmtConverter FloatConverter{
-    nullptr, // int
-    nullptr,
-    [](void *data) -> MgmtFloat { return *static_cast<MgmtFloat *>(data); },
-    [](void *data, MgmtFloat f) -> void { *static_cast<MgmtFloat *>(data) = f; },
-    nullptr,
-    nullptr // string
-  };
+  static const MgmtConverter FloatConverter{[](void *data) -> MgmtFloat { return *static_cast<MgmtFloat *>(data); },
+                                            [](void *data, MgmtFloat f) -> void { *static_cast<MgmtFloat *>(data) = f; }};
 
   // For now, strings are special.
 
@@ -8235,11 +8373,11 @@ TSHttpTxnConfigIntSet(TSHttpTxn txnp, TSOverridableConfigKey conf, TSMgmtInt val
 
   void *dest = _conf_to_memberp(conf, s->t_state.txn_conf, conv);
 
-  if (!dest || !conv->set_int) {
+  if (!dest || !conv->store_int) {
     return TS_ERROR;
   }
 
-  conv->set_int(dest, value);
+  conv->store_int(dest, value);
 
   return TS_SUCCESS;
 }
@@ -8254,11 +8392,11 @@ TSHttpTxnConfigIntGet(TSHttpTxn txnp, TSOverridableConfigKey conf, TSMgmtInt *va
   MgmtConverter const *conv;
   void *src = _conf_to_memberp(conf, s->t_state.txn_conf, conv);
 
-  if (!src || !conv->get_int) {
+  if (!src || !conv->load_int) {
     return TS_ERROR;
   }
 
-  *value = conv->get_int(src);
+  *value = conv->load_int(src);
 
   return TS_SUCCESS;
 }
@@ -8275,11 +8413,11 @@ TSHttpTxnConfigFloatSet(TSHttpTxn txnp, TSOverridableConfigKey conf, TSMgmtFloat
 
   void *dest = _conf_to_memberp(conf, s->t_state.txn_conf, conv);
 
-  if (!dest || !conv->set_float) {
+  if (!dest || !conv->store_float) {
     return TS_ERROR;
   }
 
-  conv->set_float(dest, value);
+  conv->store_float(dest, value);
 
   return TS_SUCCESS;
 }
@@ -8293,10 +8431,10 @@ TSHttpTxnConfigFloatGet(TSHttpTxn txnp, TSOverridableConfigKey conf, TSMgmtFloat
   MgmtConverter const *conv;
   void *src = _conf_to_memberp(conf, reinterpret_cast<HttpSM *>(txnp)->t_state.txn_conf, conv);
 
-  if (!src || !conv->get_float) {
+  if (!src || !conv->load_float) {
     return TS_ERROR;
   }
-  *value = conv->get_float(src);
+  *value = conv->load_float(src);
 
   return TS_SUCCESS;
 }
@@ -8389,8 +8527,8 @@ TSHttpTxnConfigStringSet(TSHttpTxn txnp, TSOverridableConfigKey conf, const char
   default: {
     MgmtConverter const *conv;
     void *dest = _conf_to_memberp(conf, s->t_state.txn_conf, conv);
-    if (dest != nullptr && conv != nullptr && conv->set_string) {
-      conv->set_string(dest, std::string_view(value, length));
+    if (dest != nullptr && conv != nullptr && conv->store_string) {
+      conv->store_string(dest, std::string_view(value, length));
     } else {
       return TS_ERROR;
     }
@@ -8426,8 +8564,8 @@ TSHttpTxnConfigStringGet(TSHttpTxn txnp, TSOverridableConfigKey conf, const char
   default: {
     MgmtConverter const *conv;
     void *src = _conf_to_memberp(conf, sm->t_state.txn_conf, conv);
-    if (src != nullptr && conv != nullptr && conv->get_string) {
-      auto sv = conv->get_string(src);
+    if (src != nullptr && conv != nullptr && conv->load_string) {
+      auto sv = conv->load_string(src);
       *value  = sv.data();
       *length = sv.size();
     } else {
@@ -9149,7 +9287,7 @@ int64_t
 TSHttpSsnIdGet(TSHttpSsn ssnp)
 {
   sdk_assert(sdk_sanity_check_http_ssn(ssnp) == TS_SUCCESS);
-  ProxyClientSession *cs = reinterpret_cast<ProxyClientSession *>(ssnp);
+  ProxySession *cs = reinterpret_cast<ProxySession *>(ssnp);
   return cs->connection_id();
 }
 
@@ -9179,8 +9317,8 @@ TSHttpSsnClientProtocolStackGet(TSHttpSsn ssnp, int n, const char **result, int 
 {
   sdk_assert(sdk_sanity_check_http_ssn(ssnp) == TS_SUCCESS);
   sdk_assert(n == 0 || result != nullptr);
-  ProxyClientSession *cs = reinterpret_cast<ProxyClientSession *>(ssnp);
-  int count              = 0;
+  ProxySession *cs = reinterpret_cast<ProxySession *>(ssnp);
+  int count        = 0;
   if (cs && n > 0) {
     auto mem = static_cast<std::string_view *>(alloca(sizeof(std::string_view) * n));
     count    = cs->populate_protocol(mem, n);
@@ -9212,7 +9350,7 @@ const char *
 TSHttpSsnClientProtocolStackContains(TSHttpSsn ssnp, const char *tag)
 {
   sdk_assert(sdk_sanity_check_http_ssn(ssnp) == TS_SUCCESS);
-  ProxyClientSession *cs = reinterpret_cast<ProxyClientSession *>(ssnp);
+  ProxySession *cs = reinterpret_cast<ProxySession *>(ssnp);
   return cs->protocol_contains(std::string_view{tag});
 }
 

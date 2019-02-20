@@ -25,10 +25,11 @@
 
 #include "HTTP2.h"
 #include "Plugin.h"
-#include "ProxyClientSession.h"
+#include "ProxySession.h"
 #include "Http2ConnectionState.h"
 #include <string_view>
 #include "tscore/ink_inet.h"
+#include "tscore/History.h"
 
 // Name                       Edata                 Description
 // HTTP2_SESSION_EVENT_INIT   Http2ClientSession *  HTTP/2 session is born
@@ -42,6 +43,11 @@
 #define HTTP2_SESSION_EVENT_XMIT (HTTP2_SESSION_EVENTS_START + 4)
 #define HTTP2_SESSION_EVENT_SHUTDOWN_INIT (HTTP2_SESSION_EVENTS_START + 5)
 #define HTTP2_SESSION_EVENT_SHUTDOWN_CONT (HTTP2_SESSION_EVENTS_START + 6)
+
+enum class Http2SessionCod : int {
+  NOT_PROVIDED,
+  HIGH_ERROR_RATE,
+};
 
 size_t const HTTP2_HEADER_BUFFER_SIZE_INDEX = CLIENT_CONNECTION_FIRST_READ_BUFFER_SIZE_INDEX;
 
@@ -152,19 +158,19 @@ private:
   IOBufferReader *ioreader;
 };
 
-class Http2ClientSession : public ProxyClientSession
+class Http2ClientSession : public ProxySession
 {
 public:
-  typedef ProxyClientSession super; ///< Parent type.
+  typedef ProxySession super; ///< Parent type.
   typedef int (Http2ClientSession::*SessionHandler)(int, void *);
 
   Http2ClientSession();
 
-  // Implement ProxyClientSession interface.
+  // Implement ProxySession interface.
   void start() override;
   void destroy() override;
   void free() override;
-  void new_connection(NetVConnection *new_vc, MIOBuffer *iobuf, IOBufferReader *reader, bool backdoor) override;
+  void new_connection(NetVConnection *new_vc, MIOBuffer *iobuf, IOBufferReader *reader) override;
 
   bool
   ready_to_free() const
@@ -219,7 +225,7 @@ public:
   }
 
   void
-  release(ProxyClientTransaction *trans) override
+  release(ProxyTransaction *trans) override
   {
   }
 
@@ -304,6 +310,9 @@ public:
     return write_buffer->max_read_avail();
   }
 
+  // Record history from Http2ConnectionState
+  void remember(const SourceLocation &location, int event, int reentrant = NO_REENTRANT);
+
   // noncopyable
   Http2ClientSession(Http2ClientSession &) = delete;
   Http2ClientSession &operator=(const Http2ClientSession &) = delete;
@@ -333,14 +342,17 @@ private:
   IpEndpoint cached_client_addr;
   IpEndpoint cached_local_addr;
 
+  History<HISTORY_DEFAULT_SIZE> _history;
+
   // For Upgrade: h2c
   Http2UpgradeContext upgrade_context;
 
-  VIO *write_vio        = nullptr;
-  int dying_event       = 0;
-  bool kill_me          = false;
-  bool half_close_local = false;
-  int recursion         = 0;
+  VIO *write_vio                 = nullptr;
+  int dying_event                = 0;
+  bool kill_me                   = false;
+  Http2SessionCod cause_of_death = Http2SessionCod::NOT_PROVIDED;
+  bool half_close_local          = false;
+  int recursion                  = 0;
 
   std::unordered_set<std::string> h2_pushed_urls;
 };

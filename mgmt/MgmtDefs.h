@@ -30,6 +30,7 @@
 #include <string_view>
 
 #include "tscore/ink_defs.h"
+#include "tscpp/util/MemSpan.h"
 
 typedef int64_t MgmtIntCounter;
 typedef int64_t MgmtInt;
@@ -37,20 +38,19 @@ typedef int8_t MgmtByte;
 typedef float MgmtFloat;
 typedef char *MgmtString;
 
-typedef enum {
+enum MgmtType {
   MGMT_INVALID  = -1,
   MGMT_INT      = 0,
   MGMT_FLOAT    = 1,
   MGMT_STRING   = 2,
   MGMT_COUNTER  = 3,
   MGMT_TYPE_MAX = 4,
-} MgmtType;
+};
 
-/*
- * MgmtCallback
- *   Management Callback functions.
- */
-typedef void *(*MgmtCallback)(void *opaque_cb_data, char *data_raw, int data_len);
+/// Management callback signature.
+/// The memory span is the message payload for the callback.
+/// This can be a lambda, which should be used if additional context information is needed.
+using MgmtCallback = std::function<void(ts::MemSpan)>;
 
 //-------------------------------------------------------------------------
 // API conversion functions.
@@ -66,19 +66,80 @@ typedef void *(*MgmtCallback)(void *opaque_cb_data, char *data_raw, int data_len
  * in this header.
  */
 struct MgmtConverter {
-  // MgmtInt conversions.
-  std::function<MgmtInt(void *)> get_int{nullptr};
-  std::function<void(void *, MgmtInt)> set_int{nullptr};
+  /** Load a native type into a @c MgmtInt
+   *
+   * This is passed a @c void* which is a pointer to the member in the configuration instance.
+   * This function must return a @c MgmtInt converted from that value.
+   */
+  MgmtInt (*load_int)(void *) = nullptr;
 
-  // MgmtFloat conversions.
-  std::function<MgmtFloat(void *)> get_float{nullptr};
-  std::function<void(void *, MgmtFloat)> set_float{nullptr};
+  /** Store a @c MgmtInt into a native type.
+   *
+   * This function is passed a @c void* which is a pointer to the member in the configuration
+   * instance and a @c MgmtInt. The member should be updated to correspond to the @c MgmtInt value.
+   */
+  void (*store_int)(void *, MgmtInt) = nullptr;
 
-  // MgmtString conversions.
-  // This is a bit different because it takes std::string_view instead of MgmtString but that's
-  // worth the difference.
-  std::function<std::string_view(void *)> get_string{nullptr};
-  std::function<void(void *, std::string_view)> set_string{nullptr};
+  /** Load a @c MgmtFloat from a native type.
+   *
+   * This is passed a @c void* which is a pointer to the member in the configuration instance.
+   * This function must return a @c MgmtFloat converted from that value.
+   */
+  MgmtFloat (*load_float)(void *) = nullptr;
+
+  /** Store a @c MgmtFloat into a native type.
+   *
+   * This function is passed a @c void* which is a pointer to the member in the configuration
+   * instance and a @c MgmtFloat. The member should be updated to correspond to the @c MgmtFloat value.
+   */
+  void (*store_float)(void *, MgmtFloat) = nullptr;
+
+  /** Load a native type into view.
+   *
+   * This is passed a @c void* which is a pointer to the member in the configuration instance.
+   * This function must return a @c string_view which contains the text for the member.
+   */
+  std::string_view (*load_string)(void *) = nullptr;
+
+  /** Store a view in a native type.
+   *
+   * This is passed a @c void* which is a pointer to the member in the configuration instance.
+   * This function must return a @c string_view which contains the text for the member.
+   */
+  void (*store_string)(void *, std::string_view) = nullptr;
+
+  // Convenience constructors because generally only one pair is valid.
+  MgmtConverter(MgmtInt (*load)(void *), void (*store)(void *, MgmtInt));
+  MgmtConverter(MgmtFloat (*load)(void *), void (*store)(void *, MgmtFloat));
+  MgmtConverter(std::string_view (*load)(void *), void (*store)(void *, std::string_view));
+
+  MgmtConverter(MgmtInt (*_load_int)(void *), void (*_store_int)(void *, MgmtInt), MgmtFloat (*_load_float)(void *),
+                void (*_store_float)(void *, MgmtFloat), std::string_view (*_load_string)(void *),
+                void (*_store_string)(void *, std::string_view));
 };
 
-#define LM_CONNECTION_SERVER "processerver.sock"
+inline MgmtConverter::MgmtConverter(MgmtInt (*load)(void *), void (*store)(void *, MgmtInt)) : load_int(load), store_int(store) {}
+
+inline MgmtConverter::MgmtConverter(MgmtFloat (*load)(void *), void (*store)(void *, MgmtFloat))
+  : load_float(load), store_float(store)
+{
+}
+
+inline MgmtConverter::MgmtConverter(std::string_view (*load)(void *), void (*store)(void *, std::string_view))
+  : load_string(load), store_string(store)
+{
+}
+
+inline MgmtConverter::MgmtConverter(MgmtInt (*_load_int)(void *), void (*_store_int)(void *, MgmtInt),
+                                    MgmtFloat (*_load_float)(void *), void (*_store_float)(void *, MgmtFloat),
+                                    std::string_view (*_load_string)(void *), void (*_store_string)(void *, std::string_view))
+  : load_int(_load_int),
+    store_int(_store_int),
+    load_float(_load_float),
+    store_float(_store_float),
+    load_string(_load_string),
+    store_string(_store_string)
+{
+}
+
+constexpr std::string_view LM_CONNECTION_SERVER{"processerver.sock"};

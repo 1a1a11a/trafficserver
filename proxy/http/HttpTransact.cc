@@ -6622,7 +6622,13 @@ HttpTransact::handle_content_length_header(State *s, HTTPHdr *header, HTTPHdr *b
     TxnDebug("http_trans", "[handle_content_length_header] RESPONSE cont len in hdr is %" PRId64, header->get_content_length());
   } else {
     // No content length header.
-    if (s->source == SOURCE_CACHE) {
+    // If the source is cache or server returned 304 response,
+    // we can try to get the content length based on object size.
+    // Also, we should check the scenario of server sending't  a unexpected 304 response for a non conditional request( no cached
+    // object )
+    if (s->source == SOURCE_CACHE ||
+        (s->source == SOURCE_HTTP_ORIGIN_SERVER && s->hdr_info.server_response.status_get() == HTTP_STATUS_NOT_MODIFIED &&
+         s->cache_info.object_read != nullptr)) {
       // If there is no content-length header, we can
       //   insert one since the cache knows definitely
       //   how long the object is unless we're in a
@@ -6637,18 +6643,14 @@ HttpTransact::handle_content_length_header(State *s, HTTPHdr *header, HTTPHdr *b
       } else if (s->range_setup == RANGE_NOT_TRANSFORM_REQUESTED) {
         // if we are doing a single Range: request, calculate the new
         // C-L: header
+        // either the object is in cache or origin returned a 304 Not Modified response. We can still turn this into a proper Range
+        // response from the cached object.
         change_response_header_because_of_range_request(s, header);
         s->hdr_info.trust_response_cl = true;
       } else {
         header->set_content_length(cl);
         s->hdr_info.trust_response_cl = true;
       }
-    } else if (s->source == SOURCE_HTTP_ORIGIN_SERVER && s->hdr_info.server_response.status_get() == HTTP_STATUS_NOT_MODIFIED &&
-               s->range_setup == RANGE_NOT_TRANSFORM_REQUESTED) {
-      // In this case, we had a cached object, possibly chunked encoded (so we don't have a CL: header), but the origin did a
-      // 304 Not Modified response. We can still turn this into a proper Range response from the cached object.
-      change_response_header_because_of_range_request(s, header);
-      s->hdr_info.trust_response_cl = true;
     } else {
       // Check to see if there is no content length
       //  header because the response precludes a
@@ -7549,13 +7551,7 @@ HttpTransact::build_request(State *s, HTTPHdr *base_request, HTTPHdr *outgoing_r
   //
   // notice that currently, based_request IS client_request
   if (base_request == &s->hdr_info.client_request) {
-    if (s->redirect_info.redirect_in_process) {
-      // this is for auto redirect
-      URL *r_url = &s->redirect_info.redirect_url;
-
-      ink_assert(r_url->valid());
-      base_request->url_get()->copy(r_url);
-    } else {
+    if (!s->redirect_info.redirect_in_process) {
       // this is for multiple cache lookup
       URL *o_url = &s->cache_info.original_url;
 
@@ -7979,9 +7975,9 @@ HttpTransact::build_error_response(State *s, HTTPStatus status_code, const char 
   int64_t len;
   char *new_msg;
 
-  new_msg = body_factory->fabricate_with_old_api(error_body_type, s, 8192, &len, body_language, sizeof(body_language), body_type,
-                                                 sizeof(body_type), s->internal_msg_buffer_size,
-                                                 s->internal_msg_buffer_size ? s->internal_msg_buffer : nullptr);
+  new_msg = body_factory->fabricate_with_old_api(
+    error_body_type, s, s->http_config_param->body_factory_response_max_size, &len, body_language, sizeof(body_language), body_type,
+    sizeof(body_type), s->internal_msg_buffer_size, s->internal_msg_buffer_size ? s->internal_msg_buffer : nullptr);
 
   // After the body factory is called, a new "body" is allocated, and we must replace it. It is
   // unfortunate that there's no way to avoid this fabrication even when there is no substitutions...
@@ -8701,42 +8697,34 @@ HttpTransact::update_size_and_time_stats(State *s, ink_hrtime total_time, ink_hr
 void
 HttpTransact::delete_warning_value(HTTPHdr *to_warn, HTTPWarningCode warning_code)
 {
-  int w_code       = (int)warning_code;
+  int w_code       = static_cast<int>(warning_code);
   MIMEField *field = to_warn->field_find(MIME_FIELD_WARNING, MIME_LEN_WARNING);
-  ;
 
   // Loop over the values to see if we need to do anything
   if (field) {
     HdrCsvIter iter;
-
-    int valid;
     int val_code;
-
-    const char *value_str;
-    int value_len;
-
     MIMEField *new_field = nullptr;
-    val_code             = iter.get_first_int(field, &valid);
 
-    while (valid) {
+    bool valid_p = iter.get_first_int(field, val_code);
+
+    while (valid_p) {
       if (val_code == w_code) {
-        // Ok, found the value we're look to delete
-        //  Look over and create a new field
-        //  appending all elements that are not this
-        //  value
-        val_code = iter.get_first_int(field, &valid);
+        // Ok, found the value we're look to delete Look over and create a new field appending all
+        // elements that are not this value
+        valid_p = iter.get_first_int(field, val_code);
 
-        while (valid) {
+        while (valid_p) {
           if (val_code != warning_code) {
-            value_str = iter.get_current(&value_len);
+            auto value = iter.get_current();
             if (new_field) {
-              new_field->value_append(to_warn->m_heap, to_warn->m_mime, value_str, value_len, true);
+              new_field->value_append(to_warn->m_heap, to_warn->m_mime, value.data(), value.size(), true);
             } else {
               new_field = to_warn->field_create();
-              to_warn->field_value_set(new_field, value_str, value_len);
+              to_warn->field_value_set(new_field, value.data(), value.size());
             }
           }
-          val_code = iter.get_next_int(&valid);
+          valid_p = iter.get_next_int(val_code);
         }
 
         to_warn->field_delete(MIME_FIELD_WARNING, MIME_LEN_WARNING);
@@ -8747,8 +8735,7 @@ HttpTransact::delete_warning_value(HTTPHdr *to_warn, HTTPWarningCode warning_cod
 
         return;
       }
-
-      val_code = iter.get_next_int(&valid);
+      valid_p = iter.get_next_int(val_code);
     }
   }
 }

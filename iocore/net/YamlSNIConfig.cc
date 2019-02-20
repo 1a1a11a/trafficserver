@@ -26,10 +26,12 @@
 #include <string_view>
 
 #include <yaml-cpp/yaml.h>
+#include <openssl/ssl.h>
 
 #include "tscore/Diags.h"
 #include "tscore/EnumDescriptor.h"
 #include "tsconfig/Errata.h"
+#include "P_SNIActionPerformer.h"
 
 ts::Errata
 YamlSNIConfig::loader(const char *cfgFilename)
@@ -55,9 +57,37 @@ YamlSNIConfig::loader(const char *cfgFilename)
   return ts::Errata();
 }
 
-TsEnumDescriptor LEVEL_DESCRIPTOR      = {{{"NONE", 0}, {"MODERATE", 1}, {"STRICT", 2}}};
-TsEnumDescriptor POLICY_DESCRIPTOR     = {{{"DISABLED", 0}, {"PERMISSIVE", 1}, {"ENFORCED", 2}}};
-TsEnumDescriptor PROPERTIES_DESCRIPTOR = {{{"NONE", 0}, {"SIGNATURE", 0x1}, {"NAME", 0x2}, {"ALL", 0x3}}};
+void
+YamlSNIConfig::Item::EnableProtocol(YamlSNIConfig::TLSProtocol proto)
+{
+  if (proto <= YamlSNIConfig::TLSProtocol::TLS_MAX) {
+    if (protocol_unset) {
+      protocol_mask  = TLSValidProtocols::max_mask;
+      protocol_unset = false;
+    }
+    switch (proto) {
+    case YamlSNIConfig::TLSProtocol::TLSv1:
+      protocol_mask &= ~SSL_OP_NO_TLSv1;
+      break;
+    case YamlSNIConfig::TLSProtocol::TLSv1_1:
+      protocol_mask &= ~SSL_OP_NO_TLSv1_1;
+      break;
+    case YamlSNIConfig::TLSProtocol::TLSv1_2:
+      protocol_mask &= ~SSL_OP_NO_TLSv1_2;
+      break;
+    case YamlSNIConfig::TLSProtocol::TLSv1_3:
+#ifdef SSL_OP_NO_TLSv1_3
+      protocol_mask &= ~SSL_OP_NO_TLSv1_3;
+#endif
+      break;
+    }
+  }
+}
+
+TsEnumDescriptor LEVEL_DESCRIPTOR         = {{{"NONE", 0}, {"MODERATE", 1}, {"STRICT", 2}}};
+TsEnumDescriptor POLICY_DESCRIPTOR        = {{{"DISABLED", 0}, {"PERMISSIVE", 1}, {"ENFORCED", 2}}};
+TsEnumDescriptor PROPERTIES_DESCRIPTOR    = {{{"NONE", 0}, {"SIGNATURE", 0x1}, {"NAME", 0x2}, {"ALL", 0x3}}};
+TsEnumDescriptor TLS_PROTOCOLS_DESCRIPTOR = {{{"TLSv1", 0}, {"TLSv1_1", 1}, {"TLSv1_2", 2}, {"TLSv1_3", 3}}};
 
 std::set<std::string> valid_sni_config_keys = {TS_fqdn,
                                                TS_disable_h2,
@@ -69,7 +99,12 @@ std::set<std::string> valid_sni_config_keys = {TS_fqdn,
                                                TS_verify_server_properties,
                                                TS_client_cert,
                                                TS_client_key,
-                                               TS_ip_allow};
+                                               TS_ip_allow
+#if TS_USE_HELLO_CB
+                                               ,
+                                               TS_valid_tls_versions_in
+#endif
+};
 
 namespace YAML
 {
@@ -80,7 +115,7 @@ template <> struct convert<YamlSNIConfig::Item> {
     for (auto &&item : node) {
       if (std::none_of(valid_sni_config_keys.begin(), valid_sni_config_keys.end(),
                        [&item](std::string s) { return s == item.first.as<std::string>(); })) {
-        throw std::runtime_error("unsupported key " + item.first.as<std::string>());
+        throw YAML::ParserException(item.Mark(), "unsupported key " + item.first.as<std::string>());
       }
     }
 
@@ -98,7 +133,7 @@ template <> struct convert<YamlSNIConfig::Item> {
       auto value = node[TS_verify_client].as<std::string>();
       int level  = LEVEL_DESCRIPTOR.get(value);
       if (level < 0) {
-        throw std::runtime_error("unknown value \"" + value + "\"");
+        throw YAML::ParserException(node[TS_verify_client].Mark(), "unknown value \"" + value + "\"");
       }
       item.verify_client_level = static_cast<uint8_t>(level);
     }
@@ -134,7 +169,7 @@ template <> struct convert<YamlSNIConfig::Item> {
       auto value = node[TS_verify_server_policy].as<std::string>();
       int policy = POLICY_DESCRIPTOR.get(value);
       if (policy < 0) {
-        throw std::runtime_error("unknown value \"" + value + "\"");
+        throw YAML::ParserException(node[TS_verify_server_policy].Mark(), "unknown value \"" + value + "\"");
       }
       item.verify_server_policy = static_cast<YamlSNIConfig::Policy>(policy);
     }
@@ -143,7 +178,7 @@ template <> struct convert<YamlSNIConfig::Item> {
       auto value     = node[TS_verify_server_properties].as<std::string>();
       int properties = PROPERTIES_DESCRIPTOR.get(value);
       if (properties < 0) {
-        throw std::runtime_error("unknown value \"" + value + "\"");
+        throw YAML::ParserException(node[TS_verify_server_properties].Mark(), "unknown value \"" + value + "\"");
       }
       item.verify_server_properties = static_cast<YamlSNIConfig::Property>(properties);
     }
@@ -157,6 +192,13 @@ template <> struct convert<YamlSNIConfig::Item> {
 
     if (node[TS_ip_allow]) {
       item.ip_allow = node[TS_ip_allow].as<std::string>();
+    }
+    if (node[TS_valid_tls_versions_in]) {
+      for (unsigned int i = 0; i < node[TS_valid_tls_versions_in].size(); i++) {
+        auto value   = node[TS_valid_tls_versions_in][i].as<std::string>();
+        int protocol = TLS_PROTOCOLS_DESCRIPTOR.get(value);
+        item.EnableProtocol(static_cast<YamlSNIConfig::TLSProtocol>(protocol));
+      }
     }
     return true;
   }
