@@ -27,6 +27,7 @@
 #include "util.h"
 #include "net.h"
 #include "ec.h"
+#include "transform.h"
 
 /* global variable */
 TSTextLogObject protocol_plugin_log;
@@ -102,7 +103,7 @@ transaction_handler(TSCont contp, TSEvent event, void *edata)
           TSHttpTxnIdGet(txnp), TSHttpEventNameLookup(event), event);
 
   switch (event) {
-  case TS_EVENT_HTTP_TXN_START:;
+  case TS_EVENT_HTTP_TXN_START:
 
     TSHttpTxnUntransformedRespCache(txnp, 1);
     TSHttpTxnTransformedRespCache(txnp, 0);
